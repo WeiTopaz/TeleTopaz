@@ -70,6 +70,7 @@ export function buildSandboxProfile(options?: SandboxProfileOptions): string {
     "; Allow Copilot/CLI config write locations",
     `(allow file-write* (subpath "${home}/Library/Application Support/GitHub Copilot"))`,
     `(allow file-write* (subpath "${home}/.config/github-copilot"))`,
+    `(allow file-write* (subpath "${home}/.gemini"))`,
     "",
     "; Allow PTY devices needed to spawn interactive child processes (minimal PTY access)",
     "(allow file-read* (subpath \"/dev/ptmx\"))",

@@ -10,7 +10,9 @@ import { markdownToTelegram, splitLongMessage } from "./util/markdown.js";
 import { formatChatDisplayName, formatJsonResult, parseIndex } from "./util/format.js";
 import { logger } from "./util/logger.js";
 import { parseFingerprints } from "./util/tls.js";
-import { CopilotSdkClient, CopilotEvent, normalizeModelInfos } from "./copilot/sdk.js";
+import { CopilotSdkClient, normalizeModelInfos } from "./copilot/sdk.js";
+import { GeminiSdkClient } from "./gemini/sdk.js";
+import type { AiEvent, AiClient, ProviderType } from "./provider/types.js";
 import { AgentContext, ToolTracking, PendingTask } from "./session/state.js";
 import { getIconPool, pickIcon } from "./session/emoji.js";
 import { buildPersonaPrompt } from "./session/persona.js";
@@ -47,7 +49,8 @@ const COMMANDS = [
   "/start",
   "/help",
   "/project",
-  "/engine",
+  "/model",
+  "/provider",
   "/info",
   "/i",
   "/new",
@@ -65,7 +68,7 @@ export class TeleTopazService {
   private readonly toolParams = new Map<string, string>();
   private readonly toolResults = new Map<string, string>();
   private readonly pendingToolConfirmations = new Map<string, { resolve: (allowed: boolean) => void }>();
-  private modelsCache: { models: string[]; fetchedAt: number } | undefined;
+  private modelsCache = new Map<ProviderType, { models: string[]; fetchedAt: number }>();
   private readonly modelsTtlMs = 5 * 60 * 1000;
   private running = true;
   private offset = 0;
@@ -99,7 +102,7 @@ export class TeleTopazService {
     const defaultModel = getDefaultModel(models);
     if (defaultModel) {
       const state = this.getOrCreateState(Number(this.ownerChatId));
-      if (!state.engine) state.engine = defaultModel;
+      if (!state.model) state.model = defaultModel;
     }
     logger.info("Bot started at", Math.floor(Date.now() / 1000));
     logger.info("💎 TeleTopaz 已啟動");
@@ -115,7 +118,8 @@ export class TeleTopazService {
     }
     logger.info("✅ 可用命令：");
     logger.info("  /project - 選擇工作區");
-    logger.info("  /engine - 切換引擎");
+    logger.info("  /model - 切換模型");
+    logger.info("  /provider - 切換供應商 (Copilot/Gemini)");
     logger.info("  /info - 檢視狀態");
     logger.info("  /new - 重啟對話");
     logger.info("  /imgclear - 清除附件");
@@ -281,11 +285,12 @@ export class TeleTopazService {
     if (state.processingTimer) clearTimeout(state.processingTimer);
     state.processingTimer = setTimeout(() => {
       if (state.processingMessageId) {
+        const providerName = state.provider === "gemini" ? "Gemini" : "Copilot";
         this.api
           .editMessageText({
             chat_id: chatId,
             message_id: state.processingMessageId,
-            text: this.prepareOutgoingText(chatId, "⏳處理中…仍在等待 Copilot 回覆"),
+            text: this.prepareOutgoingText(chatId, `⏳處理中…仍在等待 ${providerName} 回覆`),
             parse_mode: "MarkdownV2"
           })
           .catch((err) => logger.warn("Update processing message failed", err));
@@ -391,7 +396,7 @@ export class TeleTopazService {
     if (!limit || prompt.length <= limit) return 0;
     const chunks = buildPromptChunks(prompt, limit);
     if (chunks.total <= 1) return 0;
-    logger.info("Copilot send chunked", { chatId: state.chatId, total: chunks.total });
+    logger.info("AI send chunked", { chatId: state.chatId, total: chunks.total });
     for (const chunk of chunks.chunks) {
       await state.session?.send(chunk);
     }
@@ -406,9 +411,9 @@ export class TeleTopazService {
   ): Promise<{ chunked: boolean; totalChunks: number }> {
     if (!state.session) return { chunked: false, totalChunks: 0 };
     try {
-      logger.info("Copilot send", { chatId: state.chatId });
+      logger.info("AI send", { chatId: state.chatId });
       await state.session.send(prompt);
-      logger.info("Copilot send ok", { chatId: state.chatId });
+      logger.info("AI send ok", { chatId: state.chatId });
       return { chunked: false, totalChunks: 1 };
     } catch (err) {
       const isLength = this.isPromptLengthError(err);
@@ -454,13 +459,16 @@ export class TeleTopazService {
     switch (command) {
       case "/start":
       case "/help":
-        await this.sendWelcome(undefined, await this.loadAllowedDirectories(), await this.getModels(), message);
+        await this.sendWelcome(undefined, await this.loadAllowedDirectories(), await this.getModels(this.getOrCreateState(chatId).provider), message);
         return;
       case "/project":
         await this.sendDirectoryList(chatId);
         return;
-      case "/engine":
+      case "/model":
         await this.handleModelCommand(chatId, args[0]);
+        return;
+      case "/provider":
+        await this.handleProviderCommand(chatId);
         return;
       case "/info":
       case "/i":
@@ -503,8 +511,20 @@ export class TeleTopazService {
       await this.sendDirectoryList(chatId);
       return;
     }
-    if (data === "do.engine") {
+    if (data === "do.model") {
       await this.handleModelCommand(chatId, undefined);
+      return;
+    }
+    if (data === "do.provider") {
+      await this.handleProviderCommand(chatId);
+      return;
+    }
+    if (data === "pick.prov:copilot") {
+      await this.setProvider(chatId, "copilot");
+      return;
+    }
+    if (data === "pick.prov:gemini") {
+      await this.setProvider(chatId, "gemini");
       return;
     }
     if (data === "do.info") {
@@ -512,7 +532,7 @@ export class TeleTopazService {
       return;
     }
     if (data === "do.help") {
-      await this.sendWelcome(undefined, await this.loadAllowedDirectories(), await this.getModels());
+      await this.sendWelcome(undefined, await this.loadAllowedDirectories(), await this.getModels(this.getOrCreateState(chatId!).provider));
       return;
     }
     if (data === "do.new") {
@@ -529,7 +549,7 @@ export class TeleTopazService {
       await this.setDirectory(chatId, index);
       return;
     }
-    if (data.startsWith("pick.eng:")) {
+    if (data.startsWith("pick.mod:")) {
       const index = Number.parseInt(data.split(":")[1] ?? "", 10);
       await this.setModel(chatId, index);
       return;
@@ -581,28 +601,67 @@ export class TeleTopazService {
     await this.safeSend(chatId, `${label}\n\n${text}`, replyTo);
   }
 
+  private async handleProviderCommand(chatId: number): Promise<void> {
+    const state = this.getOrCreateState(chatId);
+    const copilotLabel = state.provider === "copilot" ? "🟢 Copilot" : "Copilot";
+    const geminiLabel = state.provider === "gemini" ? "🟢 Gemini" : "Gemini";
+    const keyboard: InlineKeyboardMarkup = {
+      inline_keyboard: [
+        [
+          { text: copilotLabel, callback_data: "pick.prov:copilot" },
+          { text: geminiLabel, callback_data: "pick.prov:gemini" }
+        ]
+      ]
+    };
+    await this.safeSend(chatId, `目前供應商：${state.provider}\n請選擇 AI 供應商：`, undefined, keyboard);
+  }
+
+  private async setProvider(chatId: number, provider: ProviderType): Promise<void> {
+    const state = this.getOrCreateState(chatId);
+    const oldProvider = state.provider;
+    state.provider = provider;
+
+    if (oldProvider !== provider && state.session) {
+      try { await state.session.destroy(); } catch { /* ignore */ }
+      try { await state.client?.stop(); } catch { /* ignore */ }
+      state.session = undefined;
+      state.client = undefined;
+    }
+
+    state.model = undefined;
+    const models = await this.getModels(provider);
+    const defaultModel = getDefaultModel(models);
+    if (defaultModel) state.model = defaultModel;
+
+    await this.safeSend(chatId, `已切換供應商：${provider}${defaultModel ? `\n預設模型：${defaultModel}` : ""}`, undefined);
+
+    if (state.workDir && state.model) {
+      await this.createSession(chatId, state.workDir, state.model);
+    }
+  }
+
   private async handleModelCommand(chatId: number, arg?: string): Promise<void> {
-    const models = await this.getModels();
+    const state = this.getOrCreateState(chatId);
+    const models = await this.getModels(state.provider);
     if (!models.length) {
-      await this.safeSend(chatId, "尚未設定可用引擎。", undefined);
+      await this.safeSend(chatId, "尚未設定可用模型。", undefined);
       return;
     }
 
-    const state = this.getOrCreateState(chatId);
     if (!arg) {
-      await this.sendModelList(chatId, models, state.engine);
+      await this.sendModelList(chatId, models, state.model);
       return;
     }
 
     const index = parseIndex(arg, models.length);
     if (index < 0 || index >= models.length) {
-      await this.safeSend(chatId, "引擎編號無效。", undefined);
+      await this.safeSend(chatId, "模型編號無效。", undefined);
       return;
     }
 
     const selected = models[index];
     if (!selected) {
-      await this.safeSend(chatId, "引擎編號無效。", undefined);
+      await this.safeSend(chatId, "模型編號無效。", undefined);
       return;
     }
     await this.applyModelChange(chatId, selected);
@@ -637,10 +696,10 @@ export class TeleTopazService {
       if (index % 2 === 0) keyboard.inline_keyboard.push([]);
       const row = keyboard.inline_keyboard[keyboard.inline_keyboard.length - 1]!;
       const label = model === current ? `🟢 ${model}` : model;
-      row.push({ text: label, callback_data: `pick.eng:${index}` });
+      row.push({ text: label, callback_data: `pick.mod:${index}` });
     });
 
-    await this.safeSend(chatId, "請選擇引擎：", undefined, keyboard);
+    await this.safeSend(chatId, "請選擇模型：", undefined, keyboard);
   }
 
   private async setDirectory(chatId: number, index: number): Promise<void> {
@@ -660,15 +719,16 @@ export class TeleTopazService {
   }
 
   private async setModel(chatId: number, index: number): Promise<void> {
-    const models = await this.getModels();
+    const state = this.getOrCreateState(chatId);
+    const models = await this.getModels(state.provider);
     if (!models[index]) {
-      await this.safeSend(chatId, "引擎索引無效。", undefined);
+      await this.safeSend(chatId, "模型索引無效。", undefined);
       return;
     }
 
     const selected = models[index];
     if (!selected) {
-      await this.safeSend(chatId, "引擎索引無效。", undefined);
+      await this.safeSend(chatId, "模型索引無效。", undefined);
       return;
     }
     await this.applyModelChange(chatId, selected);
@@ -676,10 +736,10 @@ export class TeleTopazService {
 
   private async applyModelChange(chatId: number, model: string): Promise<void> {
     const state = this.getOrCreateState(chatId);
-    if (state.engine && state.engine !== model) {
-      state.starredEngines = [state.engine, ...state.starredEngines.filter((m) => m !== state.engine)].slice(0, 2);
+    if (state.model && state.model !== model) {
+      state.starredModels = [state.model, ...state.starredModels.filter((m) => m !== state.model)].slice(0, 2);
     }
-    state.engine = model;
+    state.model = model;
 
     if (state.workDir) {
       await this.createSession(chatId, state.workDir, model);
@@ -688,16 +748,18 @@ export class TeleTopazService {
       await this.sendDirectoryList(chatId);
     }
 
-    await this.safeSend(chatId, `已切換引擎：${model}`, undefined);
+    await this.safeSend(chatId, `已切換模型：${model}`, undefined);
   }
 
   private async sendStatus(chatId: number): Promise<void> {
     const state = this.getOrCreateState(chatId);
     const queuePreview = state.pendingTasks.slice(0, 2).map((t) => t.prompt.slice(0, 40));
+    const providerLabel = state.provider === "gemini" ? "🧠 Gemini" : "🤖 Copilot";
     const lines = [
       `👤 擁有者：${this.ownerChatId}`,
       `🔌 連線：${state.session ? "✅ 已連線" : "⬜ 未連線"}`,
-      `⚙️ 引擎：${state.engine ?? "未設定"}`,
+      `🏷️ 供應商：${providerLabel}`,
+      `⚙️ 模型：${state.model ?? "未設定"}`,
       `📂 工作區：${state.workDir ?? "未設定"}`,
       `🔄 回合：${state.promptCycles}`,
       `⏳ 處理中：${state.processing ? "是" : "否"}`,
@@ -709,21 +771,23 @@ export class TeleTopazService {
     const keyboard: InlineKeyboardMarkup = { inline_keyboard: [] };
     if (state.workDir) {
       keyboard.inline_keyboard.push([
-        { text: "🤖 引擎", callback_data: "do.engine" },
+        { text: "🤖 模型", callback_data: "do.model" },
+        { text: "🏷️ 供應商", callback_data: "do.provider" },
         { text: "🔄 重開", callback_data: "do.new" }
       ]);
     } else {
       keyboard.inline_keyboard.push([
         { text: "📁 專案", callback_data: "do.project" },
-        { text: "🤖 引擎", callback_data: "do.engine" }
+        { text: "🤖 模型", callback_data: "do.model" },
+        { text: "🏷️ 供應商", callback_data: "do.provider" }
       ]);
     }
 
-    for (const starred of state.starredEngines) {
-      const models = await this.getModels();
+    for (const starred of state.starredModels) {
+      const models = await this.getModels(state.provider);
       const index = models.indexOf(starred);
       if (index >= 0) {
-        keyboard.inline_keyboard.push([{ text: `★ ${starred}`, callback_data: `pick.eng:${index}` }]);
+        keyboard.inline_keyboard.push([{ text: `★ ${starred}`, callback_data: `pick.mod:${index}` }]);
       }
     }
 
@@ -732,7 +796,7 @@ export class TeleTopazService {
 
   private async resetSession(chatId: number): Promise<void> {
     const state = this.getOrCreateState(chatId);
-    if (!state.session || !state.workDir || !state.engine) {
+    if (!state.session || !state.workDir || !state.model) {
       await this.safeSend(chatId, "尚未建立工作階段。", undefined);
       return;
     }
@@ -747,7 +811,7 @@ export class TeleTopazService {
       }
     }
 
-    await this.createSession(chatId, state.workDir, state.engine);
+    await this.createSession(chatId, state.workDir, state.model);
     state.resetting = false;
     state.promptCycles = 0;
     await this.safeSend(chatId, "工作階段已重設。", undefined);
@@ -799,16 +863,16 @@ export class TeleTopazService {
       }
     }
 
-    const client = new CopilotSdkClient();
+    const client = this.createProviderClient(state.provider);
     try {
       await client.start();
 
-      const systemPrompt = await buildPersonaPrompt(cwd);
+      const systemPrompt = await buildPersonaPrompt(cwd, state.provider);
 
-      const models = await this.getModels();
-      const useModel = model ?? state.engine ?? getDefaultModel(models);
+      const models = await this.getModels(state.provider);
+      const useModel = model ?? state.model ?? getDefaultModel(models);
       if (!useModel) {
-        throw new Error("未設定引擎");
+        throw new Error("未設定模型");
       }
 
       const session = await client.createSession({
@@ -855,7 +919,7 @@ export class TeleTopazService {
             return {};
           },
           onErrorOccurred: async (input: any) => {
-            logger.warn("Copilot error hook", { context: input?.errorContext });
+            logger.warn("AI error hook", { context: input?.errorContext });
             return { errorHandling: "retry" };
           }
         }
@@ -866,7 +930,7 @@ export class TeleTopazService {
       state.client = client;
       state.session = session;
       state.workDir = cwd;
-      state.engine = useModel;
+      state.model = useModel;
       state.processing = false;
       state.pendingTasks = [];
       state.resetting = false;
@@ -892,10 +956,10 @@ export class TeleTopazService {
     }
   }
 
-  private async enqueueEvent(chatId: number, event: CopilotEvent): Promise<void> {
+  private async enqueueEvent(chatId: number, event: AiEvent): Promise<void> {
     const state = this.getOrCreateState(chatId);
     const type = event.type ?? (event as { event?: string }).event ?? "unknown";
-    logger.info("Copilot event", { chatId, type });
+    logger.info("AI event", { chatId, type, provider: state.provider });
     state.pendingEvents.push(event);
     if (state.dispatchingEvents) return;
     state.dispatchingEvents = true;
@@ -913,7 +977,7 @@ export class TeleTopazService {
     state.dispatchingEvents = false;
   }
 
-  private async handleEvent(chatId: number, event: CopilotEvent): Promise<void> {
+  private async handleEvent(chatId: number, event: AiEvent): Promise<void> {
     const state = this.getOrCreateState(chatId);
     const type = event.type ?? (event as { event?: string }).event;
     const data = event.data ?? event;
@@ -1217,7 +1281,11 @@ export class TeleTopazService {
     const hasPoolHeader = iconPool.some((icon) => trimmed.startsWith(icon));
     const hasEmojiHeader = /^\p{Extended_Pictographic}/u.test(trimmed);
     const hasHeader = hasPoolHeader || hasEmojiHeader;
-    const header = `${state.sessionIcon} Copilot · ${state.workDir ? path.basename(state.workDir) : "未選擇"}`;
+
+    const providerName = state.provider === "gemini" ? "Gemini" : "Copilot";
+    const projectLabel = state.workDir ? path.basename(state.workDir) : "尚未選擇專案";
+    const header = `${state.sessionIcon} ${providerName} · ${projectLabel}`;
+
     const withHeader = hasHeader ? text : `${header}\n${text}`;
     return redact(withHeader);
   }
@@ -1306,10 +1374,11 @@ export class TeleTopazService {
 
     const state: AgentContext = {
       chatId,
+      provider: "copilot",
       client: undefined,
       session: undefined,
       workDir: undefined,
-      engine: undefined,
+      model: undefined,
       processing: false,
       pendingTasks: [],
       resetting: false,
@@ -1327,7 +1396,7 @@ export class TeleTopazService {
       receivedAssistantMessage: false,
       lastAssistantMessageHash: undefined,
       promptCycles: 0,
-      starredEngines: [],
+      starredModels: [],
       cachedDirs: [],
       personaLoaded: false,
       reactionEmojis: null
@@ -1343,13 +1412,15 @@ export class TeleTopazService {
     return expandDirectoryPatterns(patterns);
   }
 
-  private async getModels(): Promise<string[]> {
+  private async getModels(provider?: ProviderType): Promise<string[]> {
+    const p = provider ?? "copilot";
     const now = Date.now();
-    if (this.modelsCache && now - this.modelsCache.fetchedAt < this.modelsTtlMs) {
-      return this.modelsCache.models;
+    const cached = this.modelsCache.get(p);
+    if (cached && now - cached.fetchedAt < this.modelsTtlMs) {
+      return cached.models;
     }
-    const models = await loadSupportedModels();
-    this.modelsCache = { models, fetchedAt: now };
+    const models = await loadSupportedModels(p);
+    this.modelsCache.set(p, { models, fetchedAt: now });
     return models;
   }
 
@@ -1372,9 +1443,9 @@ export class TeleTopazService {
     return crypto.createHash("sha1").update(text).digest("hex");
   }
 
-  private async fetchProviderInfo(): Promise<string | undefined> {
+  private async fetchProviderInfo(provider: ProviderType = "copilot"): Promise<string | undefined> {
     try {
-      const client = new CopilotSdkClient();
+      const client = this.createProviderClient(provider);
       await client.start();
       const info = await client.queryProviderInfo();
       await client.stop();
@@ -1391,38 +1462,49 @@ export class TeleTopazService {
     }
   }
 
+  private createProviderClient(provider: ProviderType): AiClient {
+    if (provider === "gemini") {
+      return new GeminiSdkClient();
+    }
+    return new CopilotSdkClient();
+  }
+
   private async sendWelcome(providerInfo: string | undefined, dirs: string[], models: string[], message?: TelegramMessage): Promise<void> {
     const chatId = Number(this.ownerChatId);
     const nowText = this.formatServerTime();
     const ownerName = await this.fetchOwnerName();
     const state = this.getOrCreateState(chatId);
     const currentDir = state.workDir ? path.basename(state.workDir) : "未選擇";
-    const currentModel = state.engine ?? getDefaultModel(models) ?? "未設定";
+    const currentModel = state.model ?? getDefaultModel(models) ?? "未設定";
+    const providerLabel = state.provider === "gemini" ? "🧠 Gemini" : "🤖 Copilot";
     const text = [
       "💎 TeleTopaz — AI 遠端助理",
       "",
       `🕐 ${nowText}`,
       `👤 ${ownerName}`,
       `📂 ${currentDir}`,
+      `🏷️ ${providerLabel}`,
       `⚙️ ${currentModel}`,
       "",
       "📌 指令：",
       "/project — 選擇工作區",
-      "/engine — 切換 AI 引擎",
+      "/model — 切換 AI 模型",
+      "/provider — 切換供應商 (Copilot/Gemini)",
       "/info — 檢視狀態",
       "/new — 重啟對話",
       "/imgclear — 清除附件",
       "/bye — 關閉",
       "/help — 說明",
       "",
-      providerInfo ?? "⚙️ 無可用引擎"
+      providerInfo ?? "⚙️ 無可用模型"
     ].join("\n");
 
     const keyboard: InlineKeyboardMarkup = {
       inline_keyboard: [
         [
           { text: "📁 專案", callback_data: "do.project" },
-          { text: "🤖 引擎", callback_data: "do.engine" }
+          { text: "🤖 模型", callback_data: "do.model" },
+          { text: "🏷️ 供應商", callback_data: "do.provider" }
         ],
         [
           { text: "📊 狀態", callback_data: "do.info" },
@@ -1460,7 +1542,7 @@ export class TeleTopazService {
       grouped.set(provider, list);
     }
     const total = infos.length;
-    const lines: string[] = [`⚙️ 可用引擎（共 ${total} 個）`];
+    const lines: string[] = [`⚙️ 可用模型（共 ${total} 個）`];
     for (const [provider, names] of grouped.entries()) {
       lines.push(`${provider}:`);
       for (const name of names) {
@@ -1492,9 +1574,10 @@ export class TeleTopazService {
 
   private async sendContextSummary(chatId: number, state: AgentContext): Promise<void> {
     const currentDir = state.workDir ? path.basename(state.workDir) : "未選擇";
-    const models = await this.getModels();
-    const currentModel = state.engine ?? getDefaultModel(models) ?? "未設定";
-    await this.safeSend(chatId, `📁目前專案：${currentDir}\n⚙️目前引擎：${currentModel}`, undefined);
+    const models = await this.getModels(state.provider);
+    const currentModel = state.model ?? getDefaultModel(models) ?? "未設定";
+    const providerLabel = state.provider === "gemini" ? "🧠 Gemini" : "🤖 Copilot";
+    await this.safeSend(chatId, `📁目前專案：${currentDir}\n🏷️供應商：${providerLabel}\n⚙️目前模型：${currentModel}`, undefined);
   }
 
   async shutdown(): Promise<void> {

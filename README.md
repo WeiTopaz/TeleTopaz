@@ -1,11 +1,12 @@
-# 💎 TeleTopaz (Copilot SDK)
+# 💎 TeleTopaz (Copilot SDK / Gemini CLI)
 
-以 TypeScript 實作的 GitHub Copilot SDK Telegram 機器人骨架，依照 `functional-specification.md` 設計。
+以 TypeScript 實作的 AI 代理 Telegram 機器人，支援 GitHub Copilot SDK 與 Google Gemini CLI 雙供應商，依照 `functional-specification.md` 設計。
 
 ## 需求
 
 - Node.js 22+
-- `@github/copilot-sdk`（或 `@github/copilot-cli-sdk`）
+- `@github/copilot-sdk`（或 `@github/copilot-cli-sdk`）— Copilot 供應商
+- `@google/gemini-cli-core`（選用）— Gemini 供應商，使用 ADC 驗證
 - macOS 上需可使用 Keychain（透過 `keytar` 存取）
 
 ## 初始化
@@ -50,11 +51,25 @@ Bot 頭像圖檔位於 `assets/TeleTopaz_icon.png`，請透過 @BotFather 的 `/
 |---|---|
 | `/start`、`/help` | 顯示指令列表 |
 | `/project` | 選擇工作區 |
-| `/engine [編號]` | 列出或切換 AI 引擎 |
+| `/provider` | 切換 AI 供應商（Copilot / Gemini） |
+| `/model [編號]` | 列出或切換 AI 模型 |
 | `/info`（`/i`） | 檢視狀態 |
 | `/new` | 重啟對話 |
 | `/imgclear` | 清除附件圖片 |
 | `/bye` | 關閉機器人 |
+
+## 供應商支援
+
+| 供應商 | 套件 | 驗證方式 | Tool Hooks |
+|---|---|---|---|
+| Copilot (預設) | `@github/copilot-sdk` | Device Auth | ✅ 完整支援 |
+| Gemini | `@google/gemini-cli-core` | ADC (Application Default Credentials) | ✅ 透過 A2C 協議 |
+
+### Gemini CLI 設定
+
+1. 安裝 Gemini CLI Core：`npm install @google/gemini-cli-core`
+2. 設定 ADC：`gcloud auth application-default login`
+3. 在 Telegram 中使用 `/provider` 切換至 Gemini
 
 ## Acknowledgements
 

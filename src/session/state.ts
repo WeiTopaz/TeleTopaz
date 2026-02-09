@@ -1,4 +1,4 @@
-import { CopilotSdkClient, CopilotSdkSession, CopilotEvent } from "../copilot/sdk.js";
+import type { AiClient, AiSession, AiEvent, ProviderType } from "../provider/types.js";
 
 export type PendingTask = {
   prompt: string;
@@ -21,10 +21,11 @@ export type ToolTracking = {
 
 export type AgentContext = {
   chatId: number;
-  client: CopilotSdkClient | undefined;
-  session: CopilotSdkSession | undefined;
+  provider: ProviderType;
+  client: AiClient | undefined;
+  session: AiSession | undefined;
   workDir: string | undefined;
-  engine: string | undefined;
+  model: string | undefined;
   processing: boolean;
   pendingTasks: PendingTask[];
   resetting: boolean;
@@ -34,7 +35,7 @@ export type AgentContext = {
   toolMessageMap: Map<string, ToolTracking>;
   awaitingReply: boolean;
   completionPending: boolean;
-  pendingEvents: CopilotEvent[];
+  pendingEvents: AiEvent[];
   dispatchingEvents: boolean;
   replyToMessageId: number | undefined;
   processingMessageId: number | undefined;
@@ -42,7 +43,7 @@ export type AgentContext = {
   receivedAssistantMessage: boolean;
   lastAssistantMessageHash: string | undefined;
   promptCycles: number;
-  starredEngines: string[];
+  starredModels: string[];
   cachedDirs: string[];
   personaLoaded: boolean;
   reactionEmojis: string[] | null;
