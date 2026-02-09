@@ -26,6 +26,9 @@ export type AgentContext = {
   session: AiSession | undefined;
   workDir: string | undefined;
   model: string | undefined;
+  mode: "manual" | "auto";
+  routerModel: string | undefined;
+  coreModel: string | undefined;
   processing: boolean;
   pendingTasks: PendingTask[];
   resetting: boolean;
