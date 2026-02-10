@@ -68,19 +68,19 @@ export function redactUnknown(input: unknown): unknown {
     if (stack) clone.stack = stack;
     return clone;
   }
+  if (typeof input === "object" && input !== null) {
+    if (Array.isArray(input)) {
+      return input.map(redactUnknown);
+    }
+    return redactObject(input as Record<string, unknown>);
+  }
   return input;
 }
 
 export function redactObject(input: Record<string, unknown>): Record<string, unknown> {
   const output: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
-    if (typeof value === "string") {
-      output[key] = redact(value);
-    } else if (value instanceof Error) {
-      output[key] = redactUnknown(value);
-    } else {
-      output[key] = value;
-    }
+    output[key] = redactUnknown(value);
   }
   return output;
 }

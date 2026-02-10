@@ -176,7 +176,16 @@ export class TeleTopazService {
           await this.handleUpdate(update);
         }
       } catch (err) {
-        logger.error("Polling error", err);
+        const msg = String(err);
+        if (
+          msg.includes("ETIMEDOUT") ||
+          (err as any)?.code === "ETIMEDOUT" ||
+          (err as any)?.name === "AggregateError"
+        ) {
+          logger.warn("Polling connection timeout (retrying...)", msg);
+        } else {
+          logger.error("Polling error", err);
+        }
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
@@ -323,7 +332,6 @@ export class TeleTopazService {
     state.activePrompt = prompt;
     state.replyToMessageId = message.message_id;
     state.promptCycles += 1;
-    await quotaService.increment(String(chatId));
     state.awaitingReply = true;
     state.completionPending = false;
     state.receivedAssistantMessage = false;
@@ -346,6 +354,8 @@ export class TeleTopazService {
         }
       }
     }
+
+    await quotaService.increment(String(chatId), state.provider, state.model ?? "unknown");
 
     const processing = await this.safeSend(
       chatId,
@@ -932,6 +942,13 @@ export class TeleTopazService {
       `📊 使用量：${usage} (今日/本月)`
     ];
 
+    if (stats.stats.byModel && Object.keys(stats.stats.byModel).length > 0) {
+      lines.push("📈 模型統計 (本月):");
+      for (const [m, c] of Object.entries(stats.stats.byModel)) {
+        lines.push(`  • ${m}: ${c}`);
+      }
+    }
+
     const keyboard: InlineKeyboardMarkup = {
       inline_keyboard: [
         [
@@ -1108,7 +1125,7 @@ export class TeleTopazService {
   private async enqueueEvent(chatId: number, event: AiEvent): Promise<void> {
     const state = this.getOrCreateState(chatId);
     const type = event.type ?? (event as { event?: string }).event ?? "unknown";
-    logger.info("AI event", { chatId, type, provider: state.provider });
+    logger.info("AI event", { chatId, type, provider: state.provider, model: state.model });
     state.pendingEvents.push(event);
     if (state.dispatchingEvents) return;
     state.dispatchingEvents = true;

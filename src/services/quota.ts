@@ -9,9 +9,16 @@ export type UsageStats = {
   monthly: number;
   lastResetDate: string;   // YYYY-MM-DD
   lastResetMonth: string;  // YYYY-MM
+  byModel: Record<string, number>; // Monthly breakdown
 };
 
-type DailyRecord = Record<string, { count: number }>;
+type UsageDetail = {
+  count: number;
+  byProvider: Record<string, number>;
+  byModel: Record<string, number>;
+};
+
+type DailyRecord = Record<string, UsageDetail>;
 
 export class QuotaService {
   private getToday(): string {
@@ -45,48 +52,74 @@ export class QuotaService {
   }
 
   /** Sum counts for all days in the given month (YYYY-MM) for a chatId. */
-  private async monthlyTotal(chatId: string, month: string): Promise<number> {
+  private async monthlyStats(chatId: string, month: string): Promise<{ total: number; byModel: Record<string, number> }> {
     let total = 0;
+    const byModel: Record<string, number> = {};
+    
     try {
       const files = await fs.readdir(STATS_DIR);
       for (const file of files) {
         if (!file.endsWith(".json") || !file.startsWith(month)) continue;
         const record = await this.readDaily(file.replace(".json", ""));
-        total += record[chatId]?.count ?? 0;
+        const userStats = record[chatId];
+        if (userStats) {
+          total += userStats.count ?? 0;
+          if (userStats.byModel) {
+            for (const [model, count] of Object.entries(userStats.byModel)) {
+              byModel[model] = (byModel[model] ?? 0) + count;
+            }
+          }
+        }
       }
     } catch {
       // directory may not exist yet
     }
-    return total;
+    return { total, byModel };
   }
 
   async checkQuota(chatId: string): Promise<{ allowed: boolean; remaining: number; stats: UsageStats }> {
     const today = this.getToday();
     const month = this.getMonth();
     const dailyRecord = await this.readDaily(today);
-    const daily = dailyRecord[chatId]?.count ?? 0;
-    const monthly = await this.monthlyTotal(chatId, month);
+    
+    // Handle migration/compatibility if previous format was just { count: number }
+    const userDaily = dailyRecord[chatId];
+    const daily = userDaily?.count ?? 0;
+    
+    const { total: monthly, byModel } = await this.monthlyStats(chatId, month);
 
     return {
       allowed: true,
       remaining: 9999,
-      stats: { daily, monthly, lastResetDate: today, lastResetMonth: month }
+      stats: { daily, monthly, lastResetDate: today, lastResetMonth: month, byModel }
     };
   }
 
-  async increment(chatId: string): Promise<UsageStats> {
+  async increment(chatId: string, provider: string, model: string): Promise<UsageStats> {
     const today = this.getToday();
     const month = this.getMonth();
     const dailyRecord = await this.readDaily(today);
+    
     if (!dailyRecord[chatId]) {
-      dailyRecord[chatId] = { count: 0 };
+      dailyRecord[chatId] = { count: 0, byProvider: {}, byModel: {} };
     }
+    // Migration check
+    if (typeof dailyRecord[chatId].byProvider === 'undefined') dailyRecord[chatId].byProvider = {};
+    if (typeof dailyRecord[chatId].byModel === 'undefined') dailyRecord[chatId].byModel = {};
+
     dailyRecord[chatId]!.count++;
+    
+    const pKey = provider || "unknown";
+    const mKey = model || "unknown";
+    
+    dailyRecord[chatId]!.byProvider[pKey] = (dailyRecord[chatId]!.byProvider[pKey] ?? 0) + 1;
+    dailyRecord[chatId]!.byModel[mKey] = (dailyRecord[chatId]!.byModel[mKey] ?? 0) + 1;
+
     await this.writeDaily(today, dailyRecord);
 
     const daily = dailyRecord[chatId]!.count;
-    const monthly = await this.monthlyTotal(chatId, month);
-    return { daily, monthly, lastResetDate: today, lastResetMonth: month };
+    const { total: monthly, byModel } = await this.monthlyStats(chatId, month);
+    return { daily, monthly, lastResetDate: today, lastResetMonth: month, byModel };
   }
 }
 

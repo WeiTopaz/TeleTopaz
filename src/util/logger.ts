@@ -17,6 +17,26 @@ function parseLogLevel(env?: string): LogLevel {
   return "info";
 }
 
+function toLocalISOString(date: Date): string {
+  const offset = -date.getTimezoneOffset();
+  const absOffset = Math.abs(offset);
+  const sign = offset >= 0 ? "+" : "-";
+  const pad = (n: number) => String(Math.floor(n)).padStart(2, "0");
+  const pad3 = (n: number) => String(Math.floor(n)).padStart(3, "0");
+
+  const year = date.getFullYear();
+  const month = pad(date.getMonth() + 1);
+  const day = pad(date.getDate());
+  const h = pad(date.getHours());
+  const m = pad(date.getMinutes());
+  const s = pad(date.getSeconds());
+  const ms = pad3(date.getMilliseconds());
+  const offH = pad(absOffset / 60);
+  const offM = pad(absOffset % 60);
+
+  return `${year}-${month}-${day}T${h}:${m}:${s}.${ms}${sign}${offH}:${offM}`;
+}
+
 function formatArgs(args: unknown[]): string {
   return args.map((a) => {
     const redacted = redactUnknown(a);
@@ -30,20 +50,15 @@ function formatArgs(args: unknown[]): string {
 
 export class Logger {
   private level: LogLevel;
-  private filePath: string | undefined;
   private writeQueue: Promise<void> = Promise.resolve();
+  private readonly logDir = "logs";
 
-  constructor(level?: LogLevel, filePath?: string) {
+  constructor(level?: LogLevel) {
     this.level = level ?? parseLogLevel(process.env.TELETOPAZ_LOG_LEVEL);
-    this.filePath = filePath ?? process.env.TELETOPAZ_LOG_FILE;
   }
 
   setLevel(level: LogLevel): void {
     this.level = level;
-  }
-
-  setFilePath(filePath: string): void {
-    this.filePath = filePath;
   }
 
   private shouldLog(level: LogLevel): boolean {
@@ -51,14 +66,18 @@ export class Logger {
   }
 
   private writeToFile(level: LogLevel, args: unknown[]): void {
-    if (!this.filePath) return;
-    const ts = new Date().toISOString();
+    const now = new Date();
+    const dateStr = now.toLocaleDateString("en-CA"); // YYYY-MM-DD
+    const ts = toLocalISOString(now);
     const line = `[${ts}] [${level.toUpperCase()}] ${formatArgs(args)}\n`;
-    const fp = this.filePath;
+    const filePath = path.join(this.logDir, `${dateStr}.log`);
+
     this.writeQueue = this.writeQueue
-      .then(() => fs.mkdir(path.dirname(fp), { recursive: true }))
-      .then(() => fs.appendFile(fp, line, "utf8"))
-      .catch(() => { /* ignore file write errors */ });
+      .then(() => fs.mkdir(this.logDir, { recursive: true }))
+      .then(() => fs.appendFile(filePath, line, "utf8"))
+      .catch((err) => {
+        console.error("Failed to write to log file:", err);
+      });
   }
 
   debug(...args: unknown[]): void {
