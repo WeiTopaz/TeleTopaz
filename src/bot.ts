@@ -54,9 +54,8 @@ const COMMANDS = [
   "/model",
   "/info",
   "/i",
-  "/new",
-  "/imgclear",
-  "/bye"
+  "/clear",
+  "/quit"
 ];
 
 export class TeleTopazService {
@@ -103,10 +102,17 @@ export class TeleTopazService {
 
     const providerInfo = await this.fetchProviderInfo();
     const defaultModel = getDefaultModel(models);
-    if (defaultModel) {
-      const state = this.getOrCreateState(Number(this.ownerChatId));
-      if (!state.model) state.model = defaultModel;
+    const state = this.getOrCreateState(Number(this.ownerChatId));
+    if (!state.model && defaultModel) state.model = defaultModel;
+
+    // Auto-select TempNote as default workDir
+    const tempNoteDir = finalDirectories.find((d) => path.basename(d) === "TempNote");
+    if (!state.workDir && tempNoteDir) {
+      state.workDir = tempNoteDir;
+      state.cachedDirs = finalDirectories;
+      logger.info("Default workDir set to TempNote", tempNoteDir);
     }
+
     logger.info("Bot started at", Math.floor(Date.now() / 1000));
     logger.info("💎 TeleTopaz 已啟動");
     logger.info(`🗂️ ${finalDirectories.length} 個可用目錄`);
@@ -122,11 +128,16 @@ export class TeleTopazService {
     logger.info("✅ 可用命令：");
     logger.info("  /project - 選擇工作區");
     logger.info("  /model - 切換模型 (Auto/Manual)");
-    logger.info("  /info - 檢視狀態");
-    logger.info("  /new - 重啟對話");
-    logger.info("  /imgclear - 清除附件");
-    logger.info("  /bye - 關閉Bot");
+    logger.info("  /info - 說明");
+    logger.info("  /clear - 清除對話與附件");
+    logger.info("  /quit - 關閉Bot");
     logger.info("  /help - 顯示說明與指令列表");
+
+    // Auto-create session if workDir and model ready
+    if (state.workDir && (state.model || defaultModel)) {
+      await this.createSession(Number(this.ownerChatId), state.workDir, state.model ?? defaultModel);
+    }
+
     try {
       await this.sendWelcome(providerInfo, finalDirectories, models);
       logger.info(`Welcome message and provider info sent to owner (chatId: ${this.ownerChatId})`);
@@ -312,6 +323,7 @@ export class TeleTopazService {
     state.activePrompt = prompt;
     state.replyToMessageId = message.message_id;
     state.promptCycles += 1;
+    await quotaService.increment(String(chatId));
     state.awaitingReply = true;
     state.completionPending = false;
     state.receivedAssistantMessage = false;
@@ -530,13 +542,10 @@ export class TeleTopazService {
       case "/i":
         await this.sendStatus(chatId);
         return;
-      case "/new":
-        await this.resetSession(chatId);
+      case "/clear":
+        await this.handleClear(chatId);
         return;
-      case "/imgclear":
-        await this.clearImages(chatId);
-        return;
-      case "/bye":
+      case "/quit":
         if (message.date < this.startTimestamp) return;
         await this.shutdown();
         return;
@@ -582,14 +591,6 @@ export class TeleTopazService {
     }
     if (data === "do.help") {
       await this.sendWelcome(undefined, await this.loadAllowedDirectories(), await this.getModels(this.getOrCreateState(chatId!).provider));
-      return;
-    }
-    if (data === "do.new") {
-      await this.resetSession(chatId);
-      return;
-    }
-    if (data === "do.bye") {
-      await this.shutdown();
       return;
     }
 
@@ -666,8 +667,6 @@ export class TeleTopazService {
     const models = await this.getModels(provider);
     const defaultModel = getDefaultModel(models);
     if (defaultModel) state.model = defaultModel;
-
-    await this.safeSend(chatId, `已切換供應商：${provider}${defaultModel ? `\n預設模型：${defaultModel}` : ""}`, undefined);
 
     if (state.workDir && state.model) {
       await this.createSession(chatId, state.workDir, state.model);
@@ -911,80 +910,63 @@ export class TeleTopazService {
       await this.safeSend(chatId, "尚未選擇工作區，請先選擇：", undefined);
       await this.sendDirectoryList(chatId);
     }
-
-    await this.safeSend(chatId, `已切換模型：${model}`, undefined);
   }
 
   private async sendStatus(chatId: number): Promise<void> {
     const state = this.getOrCreateState(chatId);
-    const queuePreview = state.pendingTasks.slice(0, 2).map((t) => t.prompt.slice(0, 40));
-    
-    // Get usage stats
+    const ownerName = await this.fetchOwnerName();
     const stats = await quotaService.checkQuota(String(chatId));
     const usage = `${stats.stats.daily}/${stats.stats.monthly}`;
 
+    const modelLabel = state.mode === "auto"
+      ? `Auto (R:${state.provider}:${state.routerModel} / C:${this.resolveProviderForModel(state.coreModel ?? "")}:${state.coreModel})`
+      : `${state.provider}:${state.model}`;
+    const projectLabel = state.workDir ? path.basename(state.workDir) : "未選擇";
+
     const lines = [
-      `👤 擁有者：${this.ownerChatId}`,
-      `🔌 連線：${state.session ? "✅ 已連線" : "⬜ 未連線"}`,
-      `⚙️ 模型：${state.mode === "auto" ? `Auto (R:${state.routerModel} / C:${state.coreModel})` : state.model}`,
-      `📂 工作區：${state.workDir ?? "未設定"}`,
-      `🔄 回合：${state.promptCycles}`,
-      `⏳ 處理中：${state.processing ? "是" : "否"}`,
-      `📬 待辦：${state.pendingTasks.length} (${queuePreview.join(" / ")})`,
-      `📊 使用量：${usage} (日/月)`
+      `💎TeleTopaz in ${projectLabel} / 系統訊息`,
+      "",
+      `👤 ${ownerName}`,
+      `⚙️ ${modelLabel}`,
+      `📂 ${projectLabel}`,
+      `📊 使用量：${usage} (今日/本月)`
     ];
 
-    const keyboard: InlineKeyboardMarkup = { inline_keyboard: [] };
-    if (state.workDir) {
-      keyboard.inline_keyboard.push([
-        { text: "⚙️ 模型", callback_data: "do.model" },
-        { text: "🔄 重開", callback_data: "do.new" }
-      ]);
-    } else {
-      keyboard.inline_keyboard.push([
-        { text: "📁 專案", callback_data: "do.project" },
-        { text: "⚙️ 模型", callback_data: "do.model" }
-      ]);
-    }
-
-    // Starred models logic update? 
-    // Starred models are simple strings now. 
-    // We need to map them to the new callback format "do.model:manual:Provider:Model" or similar?
-    // Or just re-use the pick logic.
-    // Let's simplify and remove starred for now or adapt if requested. 
-    // The requirement didn't explicitly ask to remove starred models, but the selection flow changed.
-    // Let's just list the standard actions.
+    const keyboard: InlineKeyboardMarkup = {
+      inline_keyboard: [
+        [
+          { text: "📁 專案", callback_data: "do.project" },
+          { text: "⚙️ 模型", callback_data: "do.model" },
+          { text: "📋 說明", callback_data: "do.info" }
+        ]
+      ]
+    };
 
     await this.safeSend(chatId, lines.join("\n"), undefined, keyboard);
   }
 
-  private async resetSession(chatId: number): Promise<void> {
+  /** /clear — clear attachments + restart conversation, keeping project & model. */
+  private async handleClear(chatId: number): Promise<void> {
     const state = this.getOrCreateState(chatId);
-    if (!state.session || !state.workDir || !state.model) {
+    // Clear attachments
+    state.attachments = [];
+    state.pendingTasks = [];
+
+    if (!state.workDir || !state.model) {
       await this.safeSend(chatId, "尚未建立工作階段。", undefined);
       return;
     }
 
-    state.pendingTasks = [];
     state.resetting = true;
-    try {
-      await state.session.abort();
-    } catch (err) {
-      if (!isConnectionDisposedError(err)) {
-        logger.warn("Abort session failed", err);
+    if (state.session) {
+      try { await state.session.abort(); } catch (err) {
+        if (!isConnectionDisposedError(err)) logger.warn("Abort session failed", err);
       }
     }
 
     await this.createSession(chatId, state.workDir, state.model);
     state.resetting = false;
     state.promptCycles = 0;
-    await this.safeSend(chatId, "工作階段已重設。", undefined);
-  }
-
-  private async clearImages(chatId: number): Promise<void> {
-    const state = this.getOrCreateState(chatId);
-    state.attachments = [];
-    await this.safeSend(chatId, "已清空附件圖片。", undefined);
   }
 
   private findActiveSessionState(): AgentContext | undefined {
@@ -1110,8 +1092,11 @@ export class TeleTopazService {
         state.processingTimer = undefined;
       }
 
-      await this.safeSend(chatId, `已建立工作階段：${path.basename(cwd)}`, undefined);
-      await this.sendContextSummary(chatId, state);
+      const projectLabel = path.basename(cwd);
+      const modelLabel = state.mode === "auto"
+        ? `Auto (R:${state.routerModel} / C:${state.coreModel})`
+        : `${state.provider}:${useModel}`;
+      await this.safeSend(chatId, `💎TeleTopaz in ${projectLabel} / 系統訊息\n\n📂 ${projectLabel}\n⚙️ ${modelLabel}\n🔌 已連線`, undefined, this.buildNavKeyboard());
     } catch (err) {
       await client.stop().catch((stopErr) => {
         if (!isConnectionDisposedError(stopErr)) logger.warn("Stop client failed", stopErr);
@@ -1445,24 +1430,31 @@ export class TeleTopazService {
     }
   }
 
-  private prepareOutgoingRaw(chatId: number, text: string): string {
+  private prepareOutgoingRaw(chatId: number, text: string, source?: string): string {
     const state = this.getOrCreateState(chatId);
     const trimmed = text.trimStart();
+    // Skip adding header if the text already starts with the 💎 header
+    if (trimmed.startsWith("💎TeleTopaz")) {
+      return redact(text);
+    }
+
     const iconPool = getIconPool();
     const hasPoolHeader = iconPool.some((icon) => trimmed.startsWith(icon));
     const hasEmojiHeader = /^\p{Extended_Pictographic}/u.test(trimmed);
     const hasHeader = hasPoolHeader || hasEmojiHeader;
 
-    const providerName = state.provider === "gemini" ? "Gemini" : "Copilot";
     const projectLabel = state.workDir ? path.basename(state.workDir) : "尚未選擇專案";
-    const header = `${state.sessionIcon} ${providerName} · ${projectLabel}`;
+    const messageSource = source ?? (state.mode === "auto"
+      ? `${state.provider}:${state.model ?? state.coreModel}`
+      : `${state.provider}:${state.model ?? "未設定"}`);
+    const header = `💎TeleTopaz in ${projectLabel} / ${messageSource}`;
 
     const withHeader = hasHeader ? text : `${header}\n${text}`;
     return redact(withHeader);
   }
 
-  private prepareOutgoingText(chatId: number, text: string): string {
-    return markdownToTelegram(this.prepareOutgoingRaw(chatId, text));
+  private prepareOutgoingText(chatId: number, text: string, source?: string): string {
+    return markdownToTelegram(this.prepareOutgoingRaw(chatId, text, source));
   }
 
   private async safeSend(
@@ -1670,50 +1662,44 @@ export class TeleTopazService {
     return "copilot";
   }
 
-  private async sendWelcome(providerInfo: string | undefined, dirs: string[], models: string[], message?: TelegramMessage): Promise<void> {
-    const chatId = Number(this.ownerChatId);
-    const nowText = this.formatServerTime();
-    const ownerName = await this.fetchOwnerName();
-    const state = this.getOrCreateState(chatId);
-    const currentDir = state.workDir ? path.basename(state.workDir) : "未選擇";
-    const currentModel = state.mode === "auto" ? "Auto" : (state.model ?? "未設定");
-    
-    const text = [
-      "💎 TeleTopaz — AI 遠端助理",
-      "",
-      `🕐 ${nowText}`,
-      `👤 ${ownerName}`,
-      `📂 ${currentDir}`,
-      `⚙️ ${currentModel}`,
-      "",
-      "📌 指令：",
-      "/project — 選擇工作區",
-      "/model — 切換 AI 模型 (Auto/Manual)",
-      "/info — 檢視狀態",
-      "/new — 重啟對話",
-      "/imgclear — 清除附件",
-      "/bye — 關閉",
-      "/help — 說明",
-      "",
-      "⚙️ 可用模型：",
-      ...getAllModels().map(m => `  • ${m.provider === "gemini" ? "GeminiCLI" : "CopilotCLI"}:${m.model}`)
-    ].join("\n");
-
-    const keyboard: InlineKeyboardMarkup = {
+  private buildNavKeyboard(): InlineKeyboardMarkup {
+    return {
       inline_keyboard: [
         [
           { text: "📁 專案", callback_data: "do.project" },
           { text: "⚙️ 模型", callback_data: "do.model" },
-          { text: "🔄 重開", callback_data: "do.new" }
-        ],
-        [
-          { text: "📊 狀態", callback_data: "do.info" },
-          { text: "🛑 關閉", callback_data: "do.bye" }
+          { text: "📋 說明", callback_data: "do.info" }
         ]
       ]
     };
+  }
 
-    await this.safeSend(chatId, text.trim(), message?.message_id, keyboard);
+  private async sendWelcome(providerInfo: string | undefined, dirs: string[], models: string[], message?: TelegramMessage): Promise<void> {
+    const chatId = Number(this.ownerChatId);
+    const ownerName = await this.fetchOwnerName();
+    const state = this.getOrCreateState(chatId);
+    const projectLabel = state.workDir ? path.basename(state.workDir) : "未選擇";
+    const modelLabel = state.mode === "auto"
+      ? `Auto (R:${state.routerModel} / C:${state.coreModel})`
+      : `${state.provider}:${state.model ?? "未設定"}`;
+    
+    const text = [
+      "💎TeleTopaz in " + projectLabel + " / 系統訊息",
+      "",
+      `👤 ${ownerName}`,
+      `⚙️ ${modelLabel}`,
+      `📂 ${projectLabel}`,
+      "",
+      "📌 指令：",
+      "/project — 選擇工作區",
+      "/model — 切換 AI 模型 (Auto/Manual)",
+      "/info — 說明",
+      "/clear — 清除對話與附件",
+      "/quit — 關閉",
+      "/help — 歡迎畫面"
+    ].join("\n");
+
+    await this.safeSend(chatId, text.trim(), message?.message_id, this.buildNavKeyboard());
   }
 
   private async fetchOwnerName(): Promise<string> {
@@ -1770,14 +1756,6 @@ export class TeleTopazService {
       return "Mistral";
     }
     return "Other";
-  }
-
-  private async sendContextSummary(chatId: number, state: AgentContext): Promise<void> {
-    const currentDir = state.workDir ? path.basename(state.workDir) : "未選擇";
-    const models = await this.getModels(state.provider);
-    const currentModel = state.model ?? getDefaultModel(models) ?? "未設定";
-    const providerLabel = state.provider === "gemini" ? "🧠 Gemini" : "🤖 Copilot";
-    await this.safeSend(chatId, `📁目前專案：${currentDir}\n🏷️供應商：${providerLabel}\n⚙️目前模型：${currentModel}`, undefined);
   }
 
   async shutdown(): Promise<void> {

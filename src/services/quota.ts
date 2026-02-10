@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 
-const QUOTA_FILE = path.join(os.homedir(), ".gemini", "quota.json");
+/** Base directory for stats files, relative to project root (cwd). */
+const STATS_DIR = path.resolve("logs", "stats");
 
 export type UsageStats = {
   daily: number;
@@ -11,30 +11,9 @@ export type UsageStats = {
   lastResetMonth: string;  // YYYY-MM
 };
 
+type DailyRecord = Record<string, { count: number }>;
+
 export class QuotaService {
-  private stats: Record<string, UsageStats> = {};
-  private loaded = false;
-
-  private async load(): Promise<void> {
-    if (this.loaded) return;
-    try {
-      const data = await fs.readFile(QUOTA_FILE, "utf-8");
-      this.stats = JSON.parse(data);
-    } catch {
-      this.stats = {};
-    }
-    this.loaded = true;
-  }
-
-  private async save(): Promise<void> {
-    try {
-      await fs.mkdir(path.dirname(QUOTA_FILE), { recursive: true });
-      await fs.writeFile(QUOTA_FILE, JSON.stringify(this.stats, null, 2));
-    } catch (err) {
-      console.error("Failed to save quota stats", err);
-    }
-  }
-
   private getToday(): string {
     return new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD
   }
@@ -43,61 +22,71 @@ export class QuotaService {
     return new Date().toLocaleDateString("en-CA").slice(0, 7); // YYYY-MM
   }
 
-  // Modified to always return allowed: true, just for stats tracking
+  private dailyFilePath(date: string): string {
+    return path.join(STATS_DIR, `${date}.json`);
+  }
+
+  private async readDaily(date: string): Promise<DailyRecord> {
+    try {
+      const data = await fs.readFile(this.dailyFilePath(date), "utf-8");
+      return JSON.parse(data) as DailyRecord;
+    } catch {
+      return {};
+    }
+  }
+
+  private async writeDaily(date: string, record: DailyRecord): Promise<void> {
+    try {
+      await fs.mkdir(STATS_DIR, { recursive: true });
+      await fs.writeFile(this.dailyFilePath(date), JSON.stringify(record, null, 2), "utf-8");
+    } catch (err) {
+      console.error("Failed to save stats", err);
+    }
+  }
+
+  /** Sum counts for all days in the given month (YYYY-MM) for a chatId. */
+  private async monthlyTotal(chatId: string, month: string): Promise<number> {
+    let total = 0;
+    try {
+      const files = await fs.readdir(STATS_DIR);
+      for (const file of files) {
+        if (!file.endsWith(".json") || !file.startsWith(month)) continue;
+        const record = await this.readDaily(file.replace(".json", ""));
+        total += record[chatId]?.count ?? 0;
+      }
+    } catch {
+      // directory may not exist yet
+    }
+    return total;
+  }
+
   async checkQuota(chatId: string): Promise<{ allowed: boolean; remaining: number; stats: UsageStats }> {
-    await this.load();
     const today = this.getToday();
     const month = this.getMonth();
-    
-    let record = this.stats[chatId];
-    if (!record) {
-      record = { daily: 0, monthly: 0, lastResetDate: today, lastResetMonth: month };
-      this.stats[chatId] = record;
-    }
-
-    if (record.lastResetDate !== today) {
-      record.daily = 0;
-      record.lastResetDate = today;
-    }
-    
-    if (record.lastResetMonth !== month) {
-      record.monthly = 0;
-      record.lastResetMonth = month;
-    }
-
-    await this.save();
+    const dailyRecord = await this.readDaily(today);
+    const daily = dailyRecord[chatId]?.count ?? 0;
+    const monthly = await this.monthlyTotal(chatId, month);
 
     return {
-      allowed: true, // Always allowed as per requirement
+      allowed: true,
       remaining: 9999,
-      stats: { ...record }
+      stats: { daily, monthly, lastResetDate: today, lastResetMonth: month }
     };
   }
 
   async increment(chatId: string): Promise<UsageStats> {
-    await this.load();
     const today = this.getToday();
     const month = this.getMonth();
-    
-    let record = this.stats[chatId];
-    if (!record) {
-      record = { daily: 0, monthly: 0, lastResetDate: today, lastResetMonth: month };
-      this.stats[chatId] = record;
+    const dailyRecord = await this.readDaily(today);
+    if (!dailyRecord[chatId]) {
+      dailyRecord[chatId] = { count: 0 };
     }
+    dailyRecord[chatId]!.count++;
+    await this.writeDaily(today, dailyRecord);
 
-    if (record.lastResetDate !== today) {
-      record.daily = 0;
-      record.lastResetDate = today;
-    }
-    if (record.lastResetMonth !== month) {
-      record.monthly = 0;
-      record.lastResetMonth = month;
-    }
-
-    record.daily++;
-    record.monthly++;
-    await this.save();
-    return { ...record };
+    const daily = dailyRecord[chatId]!.count;
+    const monthly = await this.monthlyTotal(chatId, month);
+    return { daily, monthly, lastResetDate: today, lastResetMonth: month };
   }
 }
 
