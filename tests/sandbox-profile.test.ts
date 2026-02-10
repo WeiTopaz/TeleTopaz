@@ -18,6 +18,10 @@ describe("sandbox profile", () => {
     const profile = buildSandboxProfile({ workDir: "/tmp/test-project" });
     expect(profile).toContain("(version 1)");
     expect(profile).toContain("(allow default)");
+    expect(profile).toContain("(allow file-read*)");
+    expect(profile).toContain('(deny file-read* (literal "/etc/shadow"))');
+    expect(profile).toContain(`(deny file-read* (subpath "${home}/.ssh"))`);
+    expect(profile).toContain(`(deny file-read* (subpath "${home}/.gnupg"))`);
     expect(profile).toContain("(deny file-write* (subpath \"/\"))");
     expect(profile).toContain("(allow file-write* (subpath \"/tmp/test-project\"))");
     expect(profile).toContain("(allow file-write* (subpath \"/private/var/folders\"))");
@@ -38,7 +42,8 @@ describe("sandbox profile", () => {
 
   it("omits project write rule when no workDir or patterns", () => {
     const profile = buildSandboxProfile();
-    expect(profile).not.toContain("current session working directory");
+    expect(profile).not.toContain("project working directory");
     expect(profile).toContain("(deny file-write* (subpath \"/\"))");
+    expect(profile).toContain("(allow file-read*)");
   });
 });

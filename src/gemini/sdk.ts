@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import type { AiClient, AiSession, AiEvent, AiSessionOptions, AiProviderInfo } from "../provider/types.js";
 
 const retryBackoffsMs = [1000, 2000, 5000];
+const CLI_TIMEOUT_MS = 120_000;
 
 function isRetryableError(err: Error | null): boolean {
   if (!err) return false;
@@ -185,6 +186,7 @@ export class GeminiSdkSession implements AiSession {
 
       const cleanup = () => {
         signal.removeEventListener("abort", abortHandler);
+        clearTimeout(timeoutTimer);
       };
 
       const finish = (err: Error | null, result?: string) => {
@@ -201,6 +203,12 @@ export class GeminiSdkSession implements AiSession {
       };
 
       signal.addEventListener("abort", abortHandler);
+
+      // Enforce CLI call timeout — kill child and report timeout error for retry
+      const timeoutTimer = setTimeout(() => {
+        if (!child.killed) child.kill("SIGKILL");
+        finish(new Error("timeout: Gemini CLI exceeded " + CLI_TIMEOUT_MS + "ms"));
+      }, CLI_TIMEOUT_MS);
 
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");

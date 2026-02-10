@@ -34,6 +34,14 @@ function commonAncestor(dirs: string[]): string | undefined {
   return ancestor === path.sep ? undefined : ancestor;
 }
 
+/** Sensitive paths that should be denied for reading even though we allow reads globally. */
+const SENSITIVE_READ_PATHS = [
+  "/etc/shadow",
+  "/etc/master.passwd",
+  "/private/etc/master.passwd",
+  "/var/db/dslocal",
+];
+
 export function buildSandboxProfile(options?: SandboxProfileOptions): string {
   const home = os.homedir();
 
@@ -49,14 +57,21 @@ export function buildSandboxProfile(options?: SandboxProfileOptions): string {
     "(version 1)",
     "(allow default)",
     "",
-    "; deny global writes by default, only allow specific paths below",
+    "; ── Read policy: allow all reads, deny sensitive paths ──",
+    "(allow file-read*)",
+    "",
+    ...SENSITIVE_READ_PATHS.map((p) => `(deny file-read* (literal "${p}"))`),
+    `(deny file-read* (subpath "${home}/.ssh"))`,
+    `(deny file-read* (subpath "${home}/.gnupg"))`,
+    "",
+    "; ── Write policy: deny all writes, allow project + essential paths ──",
     "(deny file-write* (subpath \"/\"))",
   ];
 
   if (projectWritePath) {
     lines.push(
       "",
-      "; Allow writing only into the current session working directory",
+      "; Allow writing into the project working directory",
       `(allow file-write* (subpath "${projectWritePath}"))`
     );
   }

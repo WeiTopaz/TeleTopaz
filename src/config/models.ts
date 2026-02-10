@@ -1,5 +1,3 @@
-import { CopilotSdkClient } from "../copilot/sdk.js";
-import { GeminiSdkClient } from "../gemini/sdk.js";
 import type { ProviderType } from "../provider/types.js";
 
 const DEFAULT_MODEL_ENV = "TELETOPAZ_DEFAULT_MODEL";

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import { TelegramApi } from "./telegram/api.js";
 import { InlineKeyboardMarkup, TelegramCallbackQuery, TelegramMessage, TelegramUpdate } from "./telegram/types.js";
@@ -94,7 +95,9 @@ export class TeleTopazService {
     logger.info("Guardrails loaded", guardrails.version);
 
     const directories = await this.loadAllowedDirectories();
-    logger.info("Allowed directories", directories);
+    await this.ensureTempNoteDirectory(directories);
+    const finalDirectories = await this.loadAllowedDirectories();
+    logger.info("Allowed directories", finalDirectories);
 
     await this.clearOfflineUpdates();
 
@@ -106,27 +109,26 @@ export class TeleTopazService {
     }
     logger.info("Bot started at", Math.floor(Date.now() / 1000));
     logger.info("💎 TeleTopaz 已啟動");
-    logger.info(`🗂️ ${directories.length} 個可用目錄`);
+    logger.info(`🗂️ ${finalDirectories.length} 個可用目錄`);
     if (defaultModel) {
       logger.info(`🤖 使用預設模型: ${defaultModel}`);
     }
-    if (directories.length) {
+    if (finalDirectories.length) {
       logger.info("可用目錄:");
-      directories.forEach((dir, index) => {
+      finalDirectories.forEach((dir, index) => {
         logger.info(`  ${index + 1}. ${dir}`);
       });
     }
     logger.info("✅ 可用命令：");
     logger.info("  /project - 選擇工作區");
-    logger.info("  /model - 切換模型");
-    logger.info("  /provider - 切換供應商 (Copilot/Gemini)");
+    logger.info("  /model - 切換模型 (Auto/Manual)");
     logger.info("  /info - 檢視狀態");
     logger.info("  /new - 重啟對話");
     logger.info("  /imgclear - 清除附件");
     logger.info("  /bye - 關閉Bot");
     logger.info("  /help - 顯示說明與指令列表");
     try {
-      await this.sendWelcome(providerInfo, directories, models);
+      await this.sendWelcome(providerInfo, finalDirectories, models);
       logger.info(`Welcome message and provider info sent to owner (chatId: ${this.ownerChatId})`);
     } catch (err) {
       logger.error("Welcome send failed", err);
@@ -198,14 +200,13 @@ export class TeleTopazService {
   private async classifyIntent(chatId: number, text: string, routerModel: string): Promise<"ROUTER" | "CORE"> {
     try {
       const provider = this.inferProvider(routerModel);
-      // We need a lightweight session for classification. 
-      // Using a transient client to avoid messing with the main session state if providers differ.
-      const client = this.createProviderClient(provider as ProviderType);
+      const providerType = provider.toLowerCase().includes("google") || provider.toLowerCase().includes("gemini") ? "gemini" as ProviderType : "copilot" as ProviderType;
+      const client = this.createProviderClient(providerType);
       await client.start();
       
       const session = await client.createSession({
         model: routerModel,
-        systemPrompt: "You are an intent classifier. Determine if the user's request is simple (greetings, quick queries, simple docs) or complex (coding, reasoning, summarization, long writing, planning). Return 'ROUTER' for simple and 'CORE' for complex. Return ONLY the label."
+        systemPrompt: "You are an intent classifier. Determine if the user's request is simple (greetings, quick queries, simple docs, web search, casual chat) or complex (coding, reasoning, summarization, long writing, analysis, planning, structural decomposition). Return 'ROUTER' for simple and 'CORE' for complex. Return ONLY the label."
       });
 
       let classification = "CORE"; // Default to Core for safety
@@ -221,9 +222,8 @@ export class TeleTopazService {
       });
 
       await session.send(text);
-      // Wait briefly for response logic to fire (since we don't have sendAndWait fully standardized across providers yet)
-      // Actually, for the CLI wrapper, send() awaits the process. For Copilot, it might be async.
-      // But CopilotSdkSession.send is async. 
+      // Wait up to 30s for classification response to settle
+      await new Promise((resolve) => setTimeout(resolve, 30_000));
       
       await session.destroy();
       await client.stop();
@@ -316,6 +316,24 @@ export class TeleTopazService {
     state.completionPending = false;
     state.receivedAssistantMessage = false;
     state.lastAssistantMessageHash = undefined;
+
+    // Auto mode: classify intent and switch provider/model accordingly
+    if (state.mode === "auto" && state.routerModel && state.coreModel) {
+      const intent = await this.classifyIntent(chatId, message.text!, state.routerModel);
+      const targetModel = intent === "ROUTER" ? state.routerModel : state.coreModel;
+      const targetProvider = this.resolveProviderForModel(targetModel);
+      
+      if (state.provider !== targetProvider || state.model !== targetModel) {
+        logger.info("Auto routing", { intent, targetProvider, targetModel });
+        if (state.provider !== targetProvider) {
+          state.provider = targetProvider;
+        }
+        state.model = targetModel;
+        if (state.workDir) {
+          await this.createSession(chatId, state.workDir, targetModel);
+        }
+      }
+    }
 
     const processing = await this.safeSend(
       chatId,
@@ -508,9 +526,6 @@ export class TeleTopazService {
       case "/model":
         await this.handleModelCommand(chatId, args[0]);
         return;
-      case "/provider":
-        await this.handleProviderCommand(chatId);
-        return;
       case "/info":
       case "/i":
         await this.sendStatus(chatId);
@@ -559,18 +574,6 @@ export class TeleTopazService {
     if (data.startsWith("do.model:")) {
       const arg = data.slice(9);
       await this.handleModelCommand(chatId, arg);
-      return;
-    }
-    if (data === "do.provider") {
-      await this.handleProviderCommand(chatId);
-      return;
-    }
-    if (data === "pick.prov:copilot") {
-      await this.setProvider(chatId, "copilot");
-      return;
-    }
-    if (data === "pick.prov:gemini") {
-      await this.setProvider(chatId, "gemini");
       return;
     }
     if (data === "do.info") {
@@ -645,21 +648,6 @@ export class TeleTopazService {
       return;
     }
     await this.safeSend(chatId, `${label}\n\n${text}`, replyTo);
-  }
-
-  private async handleProviderCommand(chatId: number): Promise<void> {
-    const state = this.getOrCreateState(chatId);
-    const copilotLabel = state.provider === "copilot" ? "🟢 Copilot" : "Copilot";
-    const geminiLabel = state.provider === "gemini" ? "🟢 Gemini" : "Gemini";
-    const keyboard: InlineKeyboardMarkup = {
-      inline_keyboard: [
-        [
-          { text: copilotLabel, callback_data: "pick.prov:copilot" },
-          { text: geminiLabel, callback_data: "pick.prov:gemini" }
-        ]
-      ]
-    };
-    await this.safeSend(chatId, `目前供應商：${state.provider}\n請選擇 AI 供應商：`, undefined, keyboard);
   }
 
   private async setProvider(chatId: number, provider: ProviderType): Promise<void> {
@@ -1598,6 +1586,28 @@ export class TeleTopazService {
     return expandDirectoryPatterns(patterns);
   }
 
+  /** Ensure a TempNote directory exists within the allowed directories. */
+  private async ensureTempNoteDirectory(dirs: string[]): Promise<void> {
+    const existing = dirs.find((d) => path.basename(d) === "TempNote");
+    if (existing) {
+      logger.info("TempNote directory found", existing);
+      return;
+    }
+    // Create TempNote under the parent of the first allowed directory (or first directory itself)
+    if (!dirs.length) {
+      logger.warn("No allowed directories to create TempNote in");
+      return;
+    }
+    const parentDir = path.dirname(dirs[0]!);
+    const tempNotePath = path.join(parentDir, "TempNote");
+    try {
+      await fs.mkdir(tempNotePath, { recursive: true });
+      logger.info("TempNote directory created", tempNotePath);
+    } catch (err) {
+      logger.warn("Failed to create TempNote directory", err);
+    }
+  }
+
   private async getModels(provider?: ProviderType): Promise<string[]> {
     const p = provider ?? "copilot";
     const now = Date.now();
@@ -1653,6 +1663,11 @@ export class TeleTopazService {
       return new GeminiSdkClient();
     }
     return new CopilotSdkClient();
+  }
+
+  private resolveProviderForModel(model: string): ProviderType {
+    if (model.includes("gemini")) return "gemini";
+    return "copilot";
   }
 
   private async sendWelcome(providerInfo: string | undefined, dirs: string[], models: string[], message?: TelegramMessage): Promise<void> {
