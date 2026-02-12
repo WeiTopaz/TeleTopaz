@@ -31,9 +31,20 @@ const TOOL_PREVIEW_LEN = 150;
 
 /** Tool names that perform write or delete operations requiring human confirmation. */
 const WRITE_DELETE_TOOLS = new Set([
-  "editFile", "createFile", "deleteFile", "renameFile",
+  // Copilot SDK tool names (stored lowercase for case-insensitive lookup)
+  "editfile", "createfile", "deletefile", "renamefile",
+  // Gemini CLI tool names (snake_case)
+  "write_file", "edit_file", "create_file", "delete_file",
+  "rename_file", "move_file", "replace", "run_shell_command",
+  // Generic / short names
   "write", "create", "edit", "delete", "remove", "rename",
   "shell", "bash", "terminal", "exec",
+]);
+
+/** Keyword segments that imply a write/delete side-effect. */
+const WRITE_DELETE_KEYWORDS = new Set([
+  "write", "delete", "remove", "create", "edit", "replace",
+  "patch", "mv", "rm", "shell", "exec", "bash",
 ]);
 
 /** Returns true when the tool name implies a write/delete side-effect. */
@@ -41,8 +52,9 @@ function isWriteOrDeleteTool(name: string | undefined): boolean {
   if (!name) return false;
   const lower = name.toLowerCase();
   if (WRITE_DELETE_TOOLS.has(lower)) return true;
-  if (/\b(write|delete|remove|create|edit|patch|mv|rm)\b/i.test(lower)) return true;
-  return false;
+  // Split by separators (underscore, hyphen, dot, space) and check segments
+  const segments = lower.split(/[_\-.\s]+/);
+  return segments.some(s => WRITE_DELETE_KEYWORDS.has(s));
 }
 
 const TOOL_CONFIRM_TIMEOUT_MS = 120_000;

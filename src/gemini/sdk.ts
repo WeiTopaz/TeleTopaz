@@ -4,6 +4,24 @@ import type { AiClient, AiSession, AiEvent, AiSessionOptions, AiProviderInfo } f
 const retryBackoffsMs = [1000, 2000, 5000];
 const CLI_TIMEOUT_MS = 120_000;
 
+type PreToolUseInput = { toolName: string | undefined; toolArgs: Record<string, unknown> | undefined };
+type PreToolUseResult = { permissionDecision: string; modifiedArgs?: unknown };
+type PreToolUseHook = (input: PreToolUseInput) => Promise<PreToolUseResult>;
+
+/** Tool names that perform write/delete/shell operations requiring approval. */
+const DANGEROUS_TOOLS = new Set([
+  "write_file", "edit_file", "replace", "create_file", "delete_file",
+  "rename_file", "move_file", "run_shell_command", "shell", "bash", "exec",
+]);
+
+function isDangerousTool(name: string | undefined): boolean {
+  if (!name) return false;
+  const lower = name.toLowerCase();
+  if (DANGEROUS_TOOLS.has(lower)) return true;
+  if (/\b(write|delete|remove|create|edit|replace|patch|mv|rm|shell|exec|bash)\b/i.test(lower)) return true;
+  return false;
+}
+
 function isRetryableError(err: Error | null): boolean {
   if (!err) return false;
   const message = err.message;
@@ -64,9 +82,14 @@ export class GeminiSdkSession implements AiSession {
   private history: Array<{ role: "user" | "model"; content: string }> = [];
   private eventHandler?: (event: AiEvent) => void;
   private abortController: AbortController | undefined;
+  private onPreToolUse?: PreToolUseHook;
 
   constructor(options: AiSessionOptions) {
     this.options = options;
+    const hooks = options.hooks as Record<string, unknown> | undefined;
+    if (hooks?.onPreToolUse && typeof hooks.onPreToolUse === "function") {
+      this.onPreToolUse = hooks.onPreToolUse as PreToolUseHook;
+    }
   }
 
   onEvent(handler: (event: AiEvent) => void): void {
@@ -169,10 +192,9 @@ export class GeminiSdkSession implements AiSession {
 
   private spawnGeminiCli(prompt: string, signal: AbortSignal): Promise<string> {
     return new Promise((resolve, reject) => {
-      // Use full history for the prompt context since we are starting a fresh CLI process each time
       const fullPrompt = this.buildFullPrompt();
       
-      const args = ["-m", this.options.model, "--output-format", "text", "--approval-mode", "yolo"];
+      const args = ["-m", this.options.model, "--output-format", "stream-json", "--approval-mode", "yolo"];
       const cwd = this.options.workingDirectory || process.cwd();
 
       const child = spawn("gemini", args, {
@@ -182,7 +204,9 @@ export class GeminiSdkSession implements AiSession {
 
       let responseText = "";
       let errorText = "";
+      let stdoutBuffer = "";
       let resolved = false;
+      let stopped = false;
 
       const cleanup = () => {
         signal.removeEventListener("abort", abortHandler);
@@ -204,7 +228,6 @@ export class GeminiSdkSession implements AiSession {
 
       signal.addEventListener("abort", abortHandler);
 
-      // Enforce CLI call timeout — kill child and report timeout error for retry
       const timeoutTimer = setTimeout(() => {
         if (!child.killed) child.kill("SIGKILL");
         finish(new Error("timeout: Gemini CLI exceeded " + CLI_TIMEOUT_MS + "ms"));
@@ -213,11 +236,61 @@ export class GeminiSdkSession implements AiSession {
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
 
-      child.stdout.on("data", (chunk) => {
-        responseText += chunk;
+      child.stdout.on("data", (chunk: string) => {
+        stdoutBuffer += chunk;
+        const lines = stdoutBuffer.split("\n");
+        stdoutBuffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let event: Record<string, unknown>;
+          try {
+            event = JSON.parse(line) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+
+          if (event.type === "message" && event.role === "assistant" && typeof event.content === "string") {
+            responseText += event.content;
+          }
+
+          if (event.type === "tool_use") {
+            const toolName = event.tool_name as string | undefined;
+            this.emit({ type: "tool.execution_start", data: { toolName, toolArgs: event.parameters } });
+
+            // For dangerous tools, SIGSTOP and ask for approval via onPreToolUse
+            if (isDangerousTool(toolName) && this.onPreToolUse && child.pid && !stopped) {
+              stopped = true;
+              try { process.kill(child.pid, "SIGSTOP"); } catch { /* process may have exited */ }
+
+              this.onPreToolUse({ toolName, toolArgs: event.parameters as Record<string, unknown> | undefined })
+                .then((result) => {
+                  stopped = false;
+                  if (result.permissionDecision === "deny") {
+                    if (!child.killed) child.kill("SIGTERM");
+                    finish(new Error(`Tool "${toolName}" denied by user`));
+                  } else {
+                    try { process.kill(child.pid!, "SIGCONT"); } catch { /* ignore */ }
+                  }
+                })
+                .catch(() => {
+                  stopped = false;
+                  if (!child.killed) child.kill("SIGTERM");
+                  finish(new Error(`Tool "${toolName}" approval failed`));
+                });
+            }
+          }
+
+          if (event.type === "tool_result") {
+            this.emit({
+              type: "tool.execution_complete",
+              data: { toolName: event.tool_name, status: event.status, output: event.output }
+            });
+          }
+        }
       });
 
-      child.stderr.on("data", (chunk) => {
+      child.stderr.on("data", (chunk: string) => {
         errorText += chunk;
       });
 
@@ -227,10 +300,18 @@ export class GeminiSdkSession implements AiSession {
 
       child.on("close", (code) => {
         if (signal.aborted) return;
-        if (code === 0) {
+        // Process any remaining buffered data
+        if (stdoutBuffer.trim()) {
+          try {
+            const event = JSON.parse(stdoutBuffer) as Record<string, unknown>;
+            if (event.type === "message" && event.role === "assistant" && typeof event.content === "string") {
+              responseText += event.content;
+            }
+          } catch { /* ignore */ }
+        }
+        if (code === 0 || responseText) {
           finish(null, responseText);
         } else {
-          // Check if errorText contains the known API error and treat it as such
           const errMsg = errorText || `Gemini CLI exited with code ${code}`;
           finish(new Error(errMsg));
         }
