@@ -7,13 +7,21 @@ import { loadDirectoryPatterns } from "./config/directories.js";
 import { loadSecrets } from "./config/secrets.js";
 import { logger } from "./util/logger.js";
 
+export function requireSandboxDirectoryPatterns(patterns: string[]): string[] {
+  if (patterns.length === 0) {
+    throw new Error("TELETOPAZ_DIRECTORY_PATTERNS 必須至少設定一個可用根目錄，沙盒才能安全啟動。");
+  }
+
+  return patterns;
+}
+
 export async function ensureSandbox(): Promise<void> {
   if (process.platform !== "darwin") return;
   if (isSandboxActive()) return;
   if (!isSandboxEnabled()) return;
 
   const secrets = await loadSecrets();
-  const patterns = await loadDirectoryPatterns(secrets.directoryPatterns);
+  const patterns = requireSandboxDirectoryPatterns(await loadDirectoryPatterns(secrets.directoryPatterns));
   const profile = buildSandboxProfile({ directoryPatterns: patterns });
   const profilePath = path.join(os.tmpdir(), `teletopaz-sandbox-${process.pid}.sb`);
   await fs.writeFile(profilePath, profile, "utf8");

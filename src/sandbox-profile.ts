@@ -5,11 +5,8 @@ import { resolveAppDataDir } from "./util/app-data.js";
 const SANDBOX_ENV = "TELETOPAZ_SANDBOX";
 const SANDBOX_ACTIVE_ENV = "TELETOPAZ_SANDBOX_ACTIVE";
 
-const DISABLE_VALUES = new Set(["0", "false", "off"]);
-
 export function isSandboxEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = (env[SANDBOX_ENV] ?? "").toLowerCase().trim();
-  if (raw && DISABLE_VALUES.has(raw)) return false;
+  void env;
   return true;
 }
 
@@ -18,21 +15,22 @@ export type SandboxProfileOptions = {
   directoryPatterns?: string[];
 };
 
-/** Compute the narrowest common ancestor of a list of absolute paths. */
-function commonAncestor(dirs: string[]): string | undefined {
-  if (!dirs.length) return undefined;
-  const split = dirs.map((d) => d.split(path.sep));
-  const first = split[0]!;
-  const parts: string[] = [];
-  for (let i = 0; i < first.length; i++) {
-    if (split.every((s) => s[i] === first[i])) {
-      parts.push(first[i]!);
-    } else {
-      break;
-    }
+function getPatternWriteRoots(directoryPatterns: string[]): string[] {
+  const roots = new Set<string>();
+
+  for (const rawPattern of directoryPatterns) {
+    const normalized = rawPattern.replace(/\\/g, "/").trim();
+    if (!normalized) continue;
+
+    const globIndex = normalized.search(/[*?[{]/);
+    const prefix = globIndex >= 0 ? normalized.slice(0, globIndex) : normalized;
+    const trimmed = prefix.replace(/\/+$/, "");
+    if (!trimmed) continue;
+
+    roots.add(path.resolve(trimmed));
   }
-  const ancestor = parts.join(path.sep) || path.sep;
-  return ancestor === path.sep ? undefined : ancestor;
+
+  return Array.from(roots).sort();
 }
 
 /** Sensitive paths that should be denied for reading even though we allow reads globally. */
@@ -47,13 +45,11 @@ export function buildSandboxProfile(options?: SandboxProfileOptions): string {
   const home = os.homedir();
   const appDataDir = resolveAppDataDir();
 
-  // Determine writable project path: prefer explicit workDir, then common ancestor of patterns
-  let projectWritePath: string | undefined = options?.workDir;
-  if (!projectWritePath && options?.directoryPatterns?.length) {
-    projectWritePath = commonAncestor(
-      options.directoryPatterns.map((p) => path.resolve(p.replace(/\/?\*.*$/, "")))
-    );
-  }
+  const projectWriteRoots = options?.directoryPatterns?.length
+    ? getPatternWriteRoots(options.directoryPatterns)
+    : options?.workDir
+      ? [path.resolve(options.workDir)]
+      : [];
 
   const lines = [
     "(version 1)",
@@ -70,12 +66,11 @@ export function buildSandboxProfile(options?: SandboxProfileOptions): string {
     "(deny file-write* (subpath \"/\"))",
   ];
 
-  if (projectWritePath) {
-    lines.push(
-      "",
-      "; Allow writing into the project working directory",
-      `(allow file-write* (subpath "${projectWritePath}"))`
-    );
+  if (projectWriteRoots.length > 0) {
+    lines.push("", "; Allow writing into TELETOPAZ_DIRECTORY_PATTERNS roots");
+    for (const root of projectWriteRoots) {
+      lines.push(`(allow file-write* (subpath "${root}"))`);
+    }
   }
 
   lines.push(

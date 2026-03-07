@@ -32,9 +32,8 @@ npm run setup:secrets
 | `TELETOPAZ_BOT_TOKEN` | ✅ | Telegram Bot Token |
 | `TELETOPAZ_OWNER_CHAT_ID` | ✅ | 擁有者的 Chat ID |
 | `TELETOPAZ_OWNER_USER_ID` | ✅ | 擁有者的 User ID |
-| `TELETOPAZ_DIRECTORY_PATTERNS` | ✅ | 逗號分隔的 Glob 模式，定義可選工作區 |
+| `TELETOPAZ_DIRECTORY_PATTERNS` | ✅ | 逗號分隔的 Glob 模式，定義可選工作區與沙盒可寫入根目錄；未設定時 `npm start` 會直接拒絕啟動 |
 | `TELETOPAZ_CERT_FINGERPRINTS` | — | 逗號分隔的 SHA-256 指紋（TLS pinning） |
-| `TELETOPAZ_SANDBOX` | — | 設為 `0`/`false`/`off` 以停用 macOS 沙盒（預設啟用） |
 | `TELETOPAZ_DATA_DIR` | — | App data 目錄；用於保存已遮罩的持久化會話記憶，預設為 `~/.teletopaz` |
 | `TELETOPAZ_LOG_LEVEL` | — | Logger 等級，支援 `debug` / `info` / `warn` / `error` |
 | `TELETOPAZ_LOG_DIR` | — | 自訂日誌輸出目錄，預設為專案下的 `logs/` |
@@ -72,7 +71,7 @@ npm start
 
 ## 安全機制
 
-- **沙盒 (macOS)**：限制寫入權限僅限於 `TELETOPAZ_DIRECTORY_PATTERNS` 展開的目錄、系統暫存區、TeleTopaz app data 目錄及 Copilot 設定檔。
+- **沙盒 (macOS)**：`npm start` 會強制以沙盒啟動；可寫入範圍僅限於 `TELETOPAZ_DIRECTORY_PATTERNS` 對應根目錄、系統暫存區、TeleTopaz app data 目錄及 Copilot 設定檔。
 - **操作確認**：工具執行 `write`、`delete`、`edit` 等高風險操作時，會發送 Telegram 按鈕要求確認。
 - **Guardrails**：
     - 拒絕未經授權的目錄存取。

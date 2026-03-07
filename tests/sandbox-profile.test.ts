@@ -7,10 +7,10 @@ describe("sandbox profile", () => {
     expect(isSandboxEnabled({})).toBe(true);
   });
 
-  it("allows explicit disable via env", () => {
-    expect(isSandboxEnabled({ TELETOPAZ_SANDBOX: "0" })).toBe(false);
-    expect(isSandboxEnabled({ TELETOPAZ_SANDBOX: "false" })).toBe(false);
-    expect(isSandboxEnabled({ TELETOPAZ_SANDBOX: "off" })).toBe(false);
+  it("forces sandbox even when env tries to disable it", () => {
+    expect(isSandboxEnabled({ TELETOPAZ_SANDBOX: "0" })).toBe(true);
+    expect(isSandboxEnabled({ TELETOPAZ_SANDBOX: "false" })).toBe(true);
+    expect(isSandboxEnabled({ TELETOPAZ_SANDBOX: "off" })).toBe(true);
   });
 
   it("builds profile with dynamic home paths and PTY access", () => {
@@ -34,11 +34,23 @@ describe("sandbox profile", () => {
     expect(profile).toContain("(allow file-read* (subpath \"/dev/pts\"))");
   });
 
-  it("computes common ancestor from directory patterns", () => {
+  it("allows each TELETOPAZ_DIRECTORY_PATTERNS root without broadening to a shared ancestor", () => {
     const profile = buildSandboxProfile({
-      directoryPatterns: ["/Users/test/Project/*", "/Users/test/Project/sub/*"]
+      directoryPatterns: ["/Users/test/Project/*", "/Users/test/Workspaces/*"]
     });
     expect(profile).toContain("(allow file-write* (subpath \"/Users/test/Project\"))");
+    expect(profile).toContain("(allow file-write* (subpath \"/Users/test/Workspaces\"))");
+    expect(profile).not.toContain("(allow file-write* (subpath \"/Users/test\"))");
+  });
+
+  it("prefers TELETOPAZ_DIRECTORY_PATTERNS roots over a selected child workDir", () => {
+    const profile = buildSandboxProfile({
+      workDir: "/Users/test/Project/existing-app",
+      directoryPatterns: ["/Users/test/Project/*"]
+    });
+
+    expect(profile).toContain("(allow file-write* (subpath \"/Users/test/Project\"))");
+    expect(profile).not.toContain("(allow file-write* (subpath \"/Users/test/Project/existing-app\"))");
   });
 
   it("omits project write rule when no workDir or patterns", () => {
