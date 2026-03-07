@@ -1,10 +1,11 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TelegramApi } from "./telegram/api.js";
 import { InlineKeyboardMarkup, TelegramCallbackQuery, TelegramMessage, TelegramUpdate } from "./telegram/types.js";
-import { loadSecrets } from "./config/secrets.js";
+import { loadConfiguredRuntimeConfig, loadSecrets } from "./config/secrets.js";
 import { loadDirectoryPatterns, expandDirectoryPatterns, isAllowedDirectory } from "./config/directories.js";
 import { loadGuardrails, evaluatePrompt, evaluatePromptIgnoringLength, guardToolOutput } from "./guardrails/guardrails.js";
 import { redact } from "./util/redaction.js";
@@ -15,7 +16,14 @@ import { parseFingerprints } from "./util/tls.js";
 import { CopilotSdkClient, normalizeModelInfos } from "./copilot/sdk.js";
 import { GeminiSdkClient } from "./gemini/sdk.js";
 import { quotaService } from "./services/quota.js";
-import type { AiEvent, AiClient, ProviderType } from "./provider/types.js";
+import type {
+  AiClient,
+  AiEvent,
+  AiPermissionHandler,
+  AiPermissionRequest,
+  AiPermissionResult,
+  ProviderType
+} from "./provider/types.js";
 import { AgentContext, ToolTracking, PendingTask } from "./session/state.js";
 import { getIconPool, pickIcon } from "./session/emoji.js";
 import { SessionMemoryStore } from "./session/memory-store.js";
@@ -66,6 +74,20 @@ const WRITE_DELETE_KEYWORDS = new Set([
   "patch", "mv", "rm", "shell", "exec", "bash",
 ]);
 
+const READ_ONLY_TOOLS = new Set([
+  "readfile", "read_file", "cat", "grep", "glob", "listdir", "list_dir",
+  "listfiles", "list_files", "search", "find", "view", "open"
+]);
+
+const READ_ONLY_KEYWORDS = new Set([
+  "read", "cat", "grep", "glob", "list", "search", "find", "view", "open"
+]);
+
+const TOOL_PATH_KEY_RE = /(?:^|[_-])(path|paths|file|files|dir|dirs|directory|directories|cwd|root|glob|pattern)$/i;
+const SECRET_FILE_BASENAME_RE =
+  /^(?:\.env(?:\..+)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|id_(?:rsa|dsa|ecdsa|ed25519))$/i;
+const SECRET_PATH_SEGMENTS = new Set([".ssh", ".gnupg", ".aws", ".kube"]);
+
 /** Returns true when the tool name implies a write/delete side-effect. */
 function isWriteOrDeleteTool(name: string | undefined): boolean {
   if (!name) return false;
@@ -74,6 +96,107 @@ function isWriteOrDeleteTool(name: string | undefined): boolean {
   // Split by separators (underscore, hyphen, dot, space) and check segments
   const segments = lower.split(/[_\-.\s]+/);
   return segments.some(s => WRITE_DELETE_KEYWORDS.has(s));
+}
+
+function isReadOnlyTool(name: string | undefined): boolean {
+  if (!name) return false;
+  if (isWriteOrDeleteTool(name)) return false;
+  const lower = name.toLowerCase();
+  if (READ_ONLY_TOOLS.has(lower)) return true;
+  const segments = lower.split(/[_\-.\s]+/);
+  return segments.some((segment) => READ_ONLY_KEYWORDS.has(segment));
+}
+
+function collectToolPathCandidates(value: unknown, key?: string, depth = 0): string[] {
+  if (depth > 4 || value == null) return [];
+  if (typeof value === "string") {
+    if (!key || TOOL_PATH_KEY_RE.test(key)) {
+      return [value];
+    }
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectToolPathCandidates(entry, key, depth + 1));
+  }
+  if (typeof value !== "object") return [];
+
+  const result: string[] = [];
+  for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+    result.push(...collectToolPathCandidates(childValue, childKey, depth + 1));
+  }
+  return result;
+}
+
+function expandUserPath(input: string): string {
+  if (input === "~") return os.homedir();
+  if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2));
+  return input;
+}
+
+async function resolveToolPath(rawPath: string, baseDir: string): Promise<string> {
+  const expanded = expandUserPath(rawPath);
+  const absolute = path.isAbsolute(expanded) ? expanded : path.resolve(baseDir, expanded);
+  try {
+    return await fs.realpath(absolute);
+  } catch {
+    return path.resolve(absolute);
+  }
+}
+
+function isWithinDirectory(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isSensitivePath(targetPath: string): boolean {
+  const basename = path.basename(targetPath);
+  if (SECRET_FILE_BASENAME_RE.test(basename)) return true;
+
+  const segments = targetPath.split(path.sep).filter(Boolean);
+  return segments.some((segment) => SECRET_PATH_SEGMENTS.has(segment));
+}
+
+async function getPathRestriction(
+  rawPath: string,
+  workspaceDir: string,
+  baseDir = workspaceDir
+): Promise<string | undefined> {
+  const resolvedPath = await resolveToolPath(rawPath, baseDir);
+  if (isSensitivePath(resolvedPath)) {
+    return "敏感檔案需改用已確認的 shell / 編輯流程處理。";
+  }
+  if (!isWithinDirectory(workspaceDir, resolvedPath)) {
+    return "讀取工具僅允許存取目前工作區。";
+  }
+  return undefined;
+}
+
+async function getReadToolRestriction(
+  toolName: string | undefined,
+  toolArgs: unknown,
+  workspaceDir: string,
+  toolCwd?: string
+): Promise<string | undefined> {
+  if (!isReadOnlyTool(toolName)) return undefined;
+
+  const candidates = collectToolPathCandidates(toolArgs);
+  if (candidates.length === 0) return undefined;
+
+  const baseDir = toolCwd ? await resolveToolPath(toolCwd, workspaceDir) : workspaceDir;
+  for (const rawPath of candidates) {
+    const restriction = await getPathRestriction(rawPath, workspaceDir, baseDir);
+    if (restriction) return restriction;
+  }
+
+  return undefined;
+}
+
+function approvePermission(): AiPermissionResult {
+  return { kind: "approved" };
+}
+
+function denyPermission(): AiPermissionResult {
+  return { kind: "denied-no-approval-rule-and-could-not-request-from-user" };
 }
 
 function isRouterCandidateModel(model: string): boolean {
@@ -141,14 +264,14 @@ export class TeleTopazService {
     const directories = await this.loadAllowedDirectories();
     await this.ensureTempNoteDirectory(directories);
     const finalDirectories = await this.loadAllowedDirectories();
-    logger.info("Allowed directories", finalDirectories);
+    logger.info("Allowed directory count", { count: finalDirectories.length });
 
     await this.clearOfflineUpdates();
 
     const providerInfo = await this.fetchProviderInfo();
     const defaultModel = getDefaultModel(models);
     const state = this.getOrCreateState(Number(this.ownerChatId));
-    if (!state.model && defaultModel) state.model = defaultModel;
+    if (state.mode !== "auto" && !state.model && defaultModel) state.model = defaultModel;
 
     // Auto-select TempNote as default workDir
     const tempNoteDir = finalDirectories.find((d) => path.basename(d) === "TempNote");
@@ -164,12 +287,6 @@ export class TeleTopazService {
     if (defaultModel) {
       logger.info(`🤖 使用預設模型: ${defaultModel}`);
     }
-    if (finalDirectories.length) {
-      logger.info("可用目錄:");
-      finalDirectories.forEach((dir, index) => {
-        logger.info(`  ${index + 1}. ${dir}`);
-      });
-    }
     logger.info("✅ 可用命令：");
     logger.info("  /project - 選擇工作區");
     logger.info("  /model - 切換模型 (Auto/Manual)");
@@ -179,13 +296,14 @@ export class TeleTopazService {
     logger.info("  /help - 顯示說明與指令列表");
 
     // Auto-create session if workDir and model ready
-    if (state.workDir && (state.model || defaultModel)) {
-      await this.createSession(Number(this.ownerChatId), state.workDir, state.model ?? defaultModel);
+    const startupModel = state.mode === "auto" ? state.model : state.model ?? defaultModel;
+    if (state.workDir && startupModel) {
+      await this.createSession(Number(this.ownerChatId), state.workDir, startupModel);
     }
 
     try {
       await this.sendWelcome(providerInfo, finalDirectories, models);
-      logger.info(`Welcome message and provider info sent to owner (chatId: ${this.ownerChatId})`);
+      logger.info("Welcome message and provider info sent to owner");
     } catch (err) {
       logger.error("Welcome send failed", err);
     }
@@ -283,6 +401,7 @@ export class TeleTopazService {
         approvalMode: "plan",
         workingDirectory: APP_ROOT,
         systemPrompt: "You are an intent classifier. Determine if the user's request is simple (greetings, quick queries, simple docs, web search, casual chat) or complex (coding, reasoning, summarization, long writing, analysis, planning, structural decomposition). Never call tools. Return 'ROUTER' for simple and 'CORE' for complex. Return ONLY the label.",
+        onPermissionRequest: async () => denyPermission(),
         hooks: {
           onPreToolUse: async (input: any) => {
             logger.warn("Classifier tool use denied", { tool: input?.toolName });
@@ -346,7 +465,8 @@ export class TeleTopazService {
 
     if (!message.text || !message.text.trim()) return;
 
-    if (!state.session || !state.workDir) {
+    const canBootstrapAutoSession = state.mode === "auto" && Boolean(state.workDir) && !state.session;
+    if (!state.workDir || (!state.session && !canBootstrapAutoSession)) {
       await this.safeSend(chatId, "請先使用 /project 選擇工作區。", message.message_id);
       return;
     }
@@ -406,7 +526,7 @@ export class TeleTopazService {
       const targetModel = intent === "ROUTER" ? state.routerModel : state.coreModel;
       const targetProvider = this.resolveProviderForModel(targetModel);
       
-      if (state.provider !== targetProvider || state.model !== targetModel) {
+      if (!state.session || state.provider !== targetProvider || state.model !== targetModel) {
         logger.info("Auto routing", { intent, targetProvider, targetModel });
         if (state.provider !== targetProvider) {
           state.provider = targetProvider;
@@ -726,6 +846,74 @@ export class TeleTopazService {
     await this.safeSend(chatId, `${label}\n\n${text}`, replyTo);
   }
 
+  private async requestInteractiveApproval(chatId: number, label: string, preview: string): Promise<boolean> {
+    const confirmId = crypto.randomUUID();
+    const text = `🔧 工具 *${label}* 需要確認：\n\`${preview}\``;
+    const keyboard: InlineKeyboardMarkup = {
+      inline_keyboard: [[
+        { text: "✅ 允許", callback_data: `tool.confirm:${confirmId}` },
+        { text: "❌ 拒絕", callback_data: `tool.deny:${confirmId}` }
+      ]]
+    };
+    await this.safeSend(chatId, text, undefined, keyboard);
+
+    return new Promise<boolean>((resolve) => {
+      this.pendingToolConfirmations.set(confirmId, { resolve });
+      setTimeout(() => {
+        if (this.pendingToolConfirmations.has(confirmId)) {
+          this.pendingToolConfirmations.delete(confirmId);
+          resolve(false);
+        }
+      }, TOOL_CONFIRM_TIMEOUT_MS);
+    });
+  }
+
+  private createPermissionRequestHandler(chatId: number, workspaceDir: string): AiPermissionHandler {
+    return async (request: AiPermissionRequest): Promise<AiPermissionResult> => {
+      switch (request.kind) {
+        case "read": {
+          const restriction = await getPathRestriction(request.path, workspaceDir);
+          if (restriction) {
+            logger.warn("Permission denied by policy", { kind: request.kind, path: request.path, reason: restriction });
+            return denyPermission();
+          }
+          return approvePermission();
+        }
+        case "write": {
+          const allowed = await this.requestInteractiveApproval(
+            chatId,
+            request.kind,
+            JSON.stringify({ fileName: request.fileName, intention: request.intention }).slice(0, TOOL_PREVIEW_LEN)
+          );
+          return allowed ? approvePermission() : { kind: "denied-interactively-by-user" };
+        }
+        case "shell": {
+          const allowed = await this.requestInteractiveApproval(
+            chatId,
+            request.kind,
+            request.fullCommandText.slice(0, TOOL_PREVIEW_LEN)
+          );
+          return allowed ? approvePermission() : { kind: "denied-interactively-by-user" };
+        }
+        case "mcp": {
+          if (request.readOnly) return approvePermission();
+          const allowed = await this.requestInteractiveApproval(
+            chatId,
+            `${request.kind}:${request.serverName}/${request.toolName}`,
+            JSON.stringify(request.args ?? {}).slice(0, TOOL_PREVIEW_LEN)
+          );
+          return allowed ? approvePermission() : { kind: "denied-interactively-by-user" };
+        }
+        case "url":
+        case "memory":
+          return approvePermission();
+        case "custom-tool":
+          logger.warn("Permission denied without approval rule", { kind: request.kind, tool: request.toolName });
+          return denyPermission();
+      }
+    };
+  }
+
   private async setProvider(chatId: number, provider: ProviderType): Promise<void> {
     const state = this.getOrCreateState(chatId);
     const oldProvider = state.provider;
@@ -946,6 +1134,17 @@ export class TeleTopazService {
       await this.safeSend(chatId, "專案索引無效。", undefined);
       return;
     }
+    if (state.mode === "auto" && !state.model) {
+      state.workDir = selected;
+      const projectLabel = path.basename(selected);
+      await this.safeSend(
+        chatId,
+        `💎TeleTopaz in ${projectLabel} / 系統訊息\n\n📂 ${projectLabel}\n⚙️ ${this.formatStateModelLabel(state)}\n🔌 待路由`,
+        undefined,
+        this.buildNavKeyboard()
+      );
+      return;
+    }
     await this.createSession(chatId, selected);
   }
 
@@ -1112,35 +1311,37 @@ export class TeleTopazService {
         ...(approvalMode ? { approvalMode } : {}),
         ...(systemPrompt ? { systemPrompt } : {}),
         ...(skillDirectories?.length ? { skillDirectories } : {}),
+        onPermissionRequest: this.createPermissionRequestHandler(chatId, canonicalCwd),
         hooks: {
           onPreToolUse: async (input: any) => {
             const toolName: string | undefined = input?.toolName;
             logger.info("PreToolUse", { tool: toolName });
 
-            if (isWriteOrDeleteTool(toolName)) {
-              const confirmId = crypto.randomUUID();
-              const argsPreview = JSON.stringify(input?.toolArgs ?? {}).slice(0, TOOL_PREVIEW_LEN);
-              const text = `🔧 工具 *${toolName}* 需要確認：\n\`${argsPreview}\``;
-              const keyboard: InlineKeyboardMarkup = {
-                inline_keyboard: [[
-                  { text: "✅ 允許", callback_data: `tool.confirm:${confirmId}` },
-                  { text: "❌ 拒絕", callback_data: `tool.deny:${confirmId}` }
-                ]]
+            const readRestriction = await getReadToolRestriction(
+              toolName,
+              input?.toolArgs,
+              canonicalCwd,
+              typeof input?.cwd === "string" ? input.cwd : undefined
+            );
+            if (readRestriction) {
+              logger.warn("Tool denied by policy", { tool: toolName, reason: readRestriction });
+              return {
+                permissionDecision: "deny",
+                permissionDecisionReason: readRestriction
               };
-              await this.safeSend(chatId, text, undefined, keyboard);
+            }
 
-              const allowed = await new Promise<boolean>((resolve) => {
-                this.pendingToolConfirmations.set(confirmId, { resolve });
-                setTimeout(() => {
-                  if (this.pendingToolConfirmations.has(confirmId)) {
-                    this.pendingToolConfirmations.delete(confirmId);
-                    resolve(false);
-                  }
-                }, TOOL_CONFIRM_TIMEOUT_MS);
-              });
-
+            if (isWriteOrDeleteTool(toolName)) {
+              if (state.provider === "copilot") {
+                return { permissionDecision: "allow", modifiedArgs: input?.toolArgs };
+              }
+              const allowed = await this.requestInteractiveApproval(
+                chatId,
+                toolName ?? "tool",
+                JSON.stringify(input?.toolArgs ?? {}).slice(0, TOOL_PREVIEW_LEN)
+              );
               if (!allowed) {
-                logger.info("Tool denied by user", { tool: toolName, confirmId });
+                logger.info("Tool denied by user", { tool: toolName });
                 return { permissionDecision: "deny" };
               }
             }
@@ -1609,6 +1810,7 @@ export class TeleTopazService {
           });
         } catch (err) {
           logger.error("Send message failed", err);
+          throw err;
         }
       }
     }
@@ -1692,8 +1894,8 @@ export class TeleTopazService {
   }
 
   private async loadAllowedDirectories(): Promise<string[]> {
-    const secrets = await loadSecrets();
-    const patterns = await loadDirectoryPatterns(secrets.directoryPatterns);
+    const runtimeConfig = await loadConfiguredRuntimeConfig();
+    const patterns = await loadDirectoryPatterns(runtimeConfig.directoryPatterns);
     return expandDirectoryPatterns(patterns);
   }
 
@@ -1831,14 +2033,16 @@ export class TeleTopazService {
 
   private formatStateModelLabel(state: AgentContext, manualModelOverride?: string): string {
     if (state.mode === "auto") {
-      return `Auto (R:${this.formatResolvedModelEntry(state.routerModel)} / C:${this.formatResolvedModelEntry(state.coreModel)})`;
+      const activeModel = manualModelOverride ?? state.model;
+      const activePrefix = activeModel ? `目前:${this.formatResolvedModelEntry(activeModel)} / ` : "";
+      return `Auto (${activePrefix}R:${this.formatResolvedModelEntry(state.routerModel)} / C:${this.formatResolvedModelEntry(state.coreModel)})`;
     }
     return this.formatModelEntry(state.provider, manualModelOverride ?? state.model ?? "未設定");
   }
 
   private formatActiveSource(state: AgentContext): string {
     if (state.mode === "auto") {
-      return this.formatResolvedModelEntry(state.model ?? state.coreModel ?? state.routerModel);
+      return state.model ? `Auto:${this.formatResolvedModelEntry(state.model)}` : "Auto:待路由";
     }
     return this.formatModelEntry(state.provider, state.model ?? "未設定");
   }

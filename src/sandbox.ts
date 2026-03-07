@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildSandboxProfile, isSandboxActive, isSandboxEnabled } from "./sandbox-profile.js";
 import { loadDirectoryPatterns } from "./config/directories.js";
-import { loadSecrets } from "./config/secrets.js";
+import { loadConfiguredRuntimeConfig } from "./config/secrets.js";
 import { logger } from "./util/logger.js";
 
 export function requireSandboxDirectoryPatterns(patterns: string[]): string[] {
@@ -20,8 +20,8 @@ export async function ensureSandbox(): Promise<void> {
   if (isSandboxActive()) return;
   if (!isSandboxEnabled()) return;
 
-  const secrets = await loadSecrets();
-  const patterns = requireSandboxDirectoryPatterns(await loadDirectoryPatterns(secrets.directoryPatterns));
+  const runtimeConfig = await loadConfiguredRuntimeConfig();
+  const patterns = requireSandboxDirectoryPatterns(await loadDirectoryPatterns(runtimeConfig.directoryPatterns));
   const profile = buildSandboxProfile({ directoryPatterns: patterns });
   const profilePath = path.join(os.tmpdir(), `teletopaz-sandbox-${process.pid}.sb`);
   await fs.writeFile(profilePath, profile, "utf8");

@@ -1,5 +1,6 @@
 import readline from "node:readline";
 import { saveSecret } from "../src/config/secrets.js";
+import { saveRuntimeConfig } from "../src/config/runtime-config.js";
 
 const ENV_KEYS = {
   botToken: "TELETOPAZ_BOT_TOKEN",
@@ -47,10 +48,9 @@ async function main(): Promise<void> {
   await saveSecret("botToken", botToken);
   await saveSecret("ownerChatId", ownerChatId);
   await saveSecret("ownerUserId", ownerUserId);
-  if (directoryPatterns) await saveSecret("directoryPatterns", directoryPatterns);
-  if (certificateFingerprints) await saveSecret("certificateFingerprints", certificateFingerprints);
+  await saveRuntimeConfig({ directoryPatterns, certificateFingerprints });
 
-  console.log("Secrets stored in keychain.");
+  console.log("Required secrets stored in keychain. Runtime settings stored in app data.");
 }
 
 main().catch((err) => {

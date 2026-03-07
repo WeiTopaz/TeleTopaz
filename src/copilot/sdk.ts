@@ -1,4 +1,7 @@
+import { promises as fs } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import type { AiPermissionHandler } from "../provider/types.js";
 
 export type CopilotEvent = {
   type?: string;
@@ -13,6 +16,7 @@ export type CopilotSessionOptions = {
   workingDirectory?: string;
   skillDirectories?: string[];
   approvalMode?: "default" | "auto_edit" | "yolo" | "plan";
+  onPermissionRequest?: AiPermissionHandler;
 };
 
 export type CopilotProviderInfo = {
@@ -50,9 +54,80 @@ export type CopilotModelInfo = {
   provider?: string;
 };
 
+const PROTOCOL_VERSION_MISMATCH_RE =
+  /SDK protocol version mismatch: SDK expects version (\d+), but server reports version (\d+)/i;
+const PROTOCOL_VERSION_MISSING_RE =
+  /SDK protocol version mismatch: SDK expects version (\d+), but server does not report a protocol version/i;
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") return undefined;
   return value as Record<string, unknown>;
+}
+
+export function normalizeCopilotStartError(error: unknown): Error {
+  const baseError = error instanceof Error ? error : new Error(String(error));
+  const mismatch = baseError.message.match(PROTOCOL_VERSION_MISMATCH_RE);
+  if (mismatch) {
+    const [, expectedVersion, serverVersion] = mismatch;
+    return new Error(
+      `Copilot SDK 與 CLI 協定版本不相容（SDK=${expectedVersion}，server=${serverVersion}）。請更新專案的 @github/copilot-sdk 後重新安裝相依套件再試一次。`,
+      { cause: baseError }
+    );
+  }
+
+  const missingVersion = baseError.message.match(PROTOCOL_VERSION_MISSING_RE);
+  if (missingVersion) {
+    const [, expectedVersion] = missingVersion;
+    return new Error(
+      `Copilot SDK 與 CLI 協定版本不相容（SDK=${expectedVersion}，server=unknown）。請更新專案的 @github/copilot-sdk 後重新安裝相依套件再試一次。`,
+      { cause: baseError }
+    );
+  }
+
+  return baseError;
+}
+
+function findNodeModulesRoot(entryPath: string): string | undefined {
+  let current = path.dirname(path.resolve(entryPath));
+  while (true) {
+    if (path.basename(current) === "node_modules") return current;
+    const parent = path.dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function ensureVscodeJsonrpcNodeShim(nodeModulesRoot: string): Promise<boolean> {
+  const packageDir = path.join(nodeModulesRoot, "vscode-jsonrpc");
+  const shimPath = path.join(packageDir, "node");
+  const targetPath = path.join(packageDir, "node.js");
+
+  if (await pathExists(shimPath)) return false;
+  if (!await pathExists(targetPath)) return false;
+
+  try {
+    await fs.writeFile(
+      shimPath,
+      "module.exports = require('./node.js');\n",
+      { encoding: "utf8", flag: "wx" }
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      return false;
+    }
+    throw error;
+  }
+
+  return true;
 }
 
 export function normalizeModelInfos(models: unknown[]): CopilotModelInfo[] {
@@ -87,16 +162,33 @@ export function normalizeModelInfos(models: unknown[]): CopilotModelInfo[] {
 
 async function loadCopilotSdk(): Promise<{ CopilotClient: new (options: Record<string, unknown>) => CopilotClientLike }> {
   const candidates = ["@github/copilot-sdk", "@github/copilot-cli-sdk"] as const;
+  let lastLoadError: unknown;
+
   for (const name of candidates) {
     try {
-      const mod = (await import(name)) as { CopilotClient?: new (options: Record<string, unknown>) => CopilotClientLike };
+      const entryUrl = await import.meta.resolve(name);
+      const entryPath = fileURLToPath(entryUrl);
+      const nodeModulesRoot = findNodeModulesRoot(entryPath);
+      if (nodeModulesRoot) {
+        await ensureVscodeJsonrpcNodeShim(nodeModulesRoot);
+      }
+
+      const mod = (await import(entryUrl)) as { CopilotClient?: new (options: Record<string, unknown>) => CopilotClientLike };
       if (mod.CopilotClient) {
         return { CopilotClient: mod.CopilotClient };
       }
-    } catch {
+      lastLoadError = new Error(`Copilot SDK 載入成功但缺少 CopilotClient 匯出：${name}`);
+    } catch (error) {
+      lastLoadError = error;
       continue;
     }
   }
+
+  if (lastLoadError) {
+    const baseError = lastLoadError instanceof Error ? lastLoadError : new Error(String(lastLoadError));
+    throw new Error(`Copilot SDK 載入失敗：${baseError.message}`, { cause: baseError });
+  }
+
   throw new Error("Copilot SDK not installed. Install @github/copilot-sdk or @github/copilot-cli-sdk.");
 }
 
@@ -106,8 +198,12 @@ export class CopilotSdkClient {
   async start(): Promise<void> {
     const { CopilotClient } = await loadCopilotSdk();
     const client = new CopilotClient({ auth: { type: "device" } });
-    await client.start();
-    this.client = client;
+    try {
+      await client.start();
+      this.client = client;
+    } catch (error) {
+      throw normalizeCopilotStartError(error);
+    }
   }
 
   async stop(): Promise<void> {
@@ -128,7 +224,8 @@ export class CopilotSdkClient {
       ...(options.hooks ? { hooks: options.hooks } : {}),
       ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
       ...(options.workingDirectory ? { workingDirectory: options.workingDirectory } : {}),
-      ...(options.skillDirectories?.length ? { skillDirectories: options.skillDirectories } : {})
+      ...(options.skillDirectories?.length ? { skillDirectories: options.skillDirectories } : {}),
+      ...(options.onPermissionRequest ? { onPermissionRequest: options.onPermissionRequest } : {})
     };
 
     const session = await this.client.createSession(sessionOptions);

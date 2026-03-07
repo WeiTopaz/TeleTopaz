@@ -38,7 +38,7 @@ npm run setup:secrets
 | `TELETOPAZ_LOG_LEVEL` | — | Logger 等級，支援 `debug` / `info` / `warn` / `error` |
 | `TELETOPAZ_LOG_DIR` | — | 自訂日誌輸出目錄，預設為專案下的 `logs/` |
 
-> 所有值透過 `npm run setup:secrets` 寫入 macOS Keychain，也可在 CI 直接設定環境變數。
+> `npm run setup:secrets` 會把必要 secrets（Bot Token / Owner IDs）寫入 macOS Keychain；`TELETOPAZ_DIRECTORY_PATTERNS` 與 `TELETOPAZ_CERT_FINGERPRINTS` 這類非敏感啟動設定會寫入 TeleTopaz app data 下的 `runtime-config.json`。所有欄位都可以直接由環境變數覆蓋；舊版若曾把這兩個值存在 Keychain，啟動時會自動遷移一次。
 
 ## 執行
 
@@ -71,6 +71,7 @@ npm start
 
 ### 1. GitHub Copilot (預設)
 本專案預設使用 `@github/copilot-sdk`。首次啟動時需依照 Log 指示進行裝置驗證 (Device Auth)。
+若 GitHub CLI / Copilot agent runtime 升級後出現 `SDK protocol version mismatch`，請先執行 `npm install` 以同步專案內的 SDK 版本；目前相依已更新到支援 protocol v3 的 `@github/copilot-sdk` 版本線。
 
 ### 2. Google Gemini (選用)
 若要使用 Gemini 模型 (如 `gmcli:gemini-3.1-pro-preview`)，需確保環境中可執行 `gemini` 指令：
@@ -82,7 +83,8 @@ npm start
 
 ## 安全機制
 
-- **沙盒 (macOS)**：`npm start` 會強制以沙盒啟動；可寫入範圍僅限於 `TELETOPAZ_DIRECTORY_PATTERNS` 對應根目錄、系統暫存區、TeleTopaz app data 目錄及 Copilot 設定檔。
+- **沙盒 (macOS)**：`npm start` 會強制以沙盒啟動；可寫入範圍僅限於 `TELETOPAZ_DIRECTORY_PATTERNS` 對應根目錄、系統暫存區、TeleTopaz app data 目錄及 Copilot / Gemini 設定檔。
+- **讀取限制**：無需人工確認的讀取型工具（如 read / grep / glob / list）只允許存取目前選定工作區；對 `.env`、`.npmrc`、`.git-credentials`、`id_*` 等敏感檔名會直接拒絕。
 - **操作確認**：工具執行 `write`、`delete`、`edit` 等高風險操作時，會發送 Telegram 按鈕要求確認。
 - **Guardrails**：
     - 拒絕未經授權的目錄存取。

@@ -27,7 +27,7 @@ describe("TeleTopazService model display", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows ctcli and gmcli model entries in auto mode status", async () => {
+  it("shows auto routing config together with the current routed model in status", async () => {
     const service = new TeleTopazService(createApi(), "1", "1", 0);
     const safeSend = vi.fn().mockResolvedValue(undefined);
     vi.spyOn(quotaService, "checkQuota").mockResolvedValue({
@@ -50,6 +50,7 @@ describe("TeleTopazService model display", () => {
     state.provider = "copilot";
     state.routerModel = "gpt-5-mini";
     state.coreModel = "gemini-3.1-pro-preview";
+    state.model = "gemini-3.1-pro-preview";
     (service as unknown as { safeSend: typeof safeSend }).safeSend = safeSend;
 
     await (service as unknown as {
@@ -57,8 +58,26 @@ describe("TeleTopazService model display", () => {
     }).sendStatus(1);
 
     const text = safeSend.mock.calls[0]?.[1];
-    expect(text).toContain("⚙️ Auto (R:ctcli:gpt-5-mini / C:gmcli:gemini-3.1-pro-preview)");
+    expect(text).toContain("⚙️ Auto (目前:gmcli:gemini-3.1-pro-preview / R:ctcli:gpt-5-mini / C:gmcli:gemini-3.1-pro-preview)");
     expect(text).toContain("• gmcli:gemini-3.1-pro-preview: 2");
+  });
+
+  it("uses an auto pending label in outgoing headers before the first route is selected", () => {
+    const service = new TeleTopazService(createApi(), "1", "1", 0);
+    const state = (service as unknown as {
+      getOrCreateState: (chatId: number) => Record<string, unknown>;
+    }).getOrCreateState(1);
+
+    state.mode = "auto";
+    state.model = undefined;
+    state.routerModel = "gpt-5-mini";
+    state.coreModel = "gemini-3.1-pro-preview";
+
+    const text = (service as unknown as {
+      prepareOutgoingRaw: (chatId: number, text: string) => string;
+    }).prepareOutgoingRaw(1, "建立工作階段失敗：boom");
+
+    expect(text).toContain("💎TeleTopaz in 尚未選擇專案 / Auto:待路由");
   });
 
   it("renders the unified model picker with REF models and CLI aliases", async () => {

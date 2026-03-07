@@ -66,11 +66,20 @@ describe("TeleTopazService classifyIntent", () => {
     const options = vi.mocked(client.createSession).mock.calls[0]?.[0] as {
       approvalMode?: string;
       workingDirectory?: string;
+      onPermissionRequest?: (input: unknown) => Promise<unknown>;
       hooks?: { onPreToolUse?: (input: { toolName?: string; toolArgs?: Record<string, unknown> }) => Promise<unknown> };
     } | undefined;
 
     expect(options?.approvalMode).toBe("plan");
     expect(options?.workingDirectory).toBe(path.resolve("."));
+    expect(options?.onPermissionRequest).toBeTypeOf("function");
+    await expect(options?.onPermissionRequest?.({
+      kind: "read",
+      intention: "Read file",
+      path: "README.md"
+    })).resolves.toEqual({
+      kind: "denied-no-approval-rule-and-could-not-request-from-user"
+    });
     expect(options?.hooks?.onPreToolUse).toBeTypeOf("function");
     await expect(options?.hooks?.onPreToolUse?.({
       toolName: "read_file",

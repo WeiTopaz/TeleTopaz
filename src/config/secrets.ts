@@ -1,4 +1,5 @@
 import keytar from "keytar";
+import { loadRuntimeConfig, type RuntimeConfig } from "./runtime-config.js";
 
 export type SecretKeys = {
   botToken: string;
@@ -15,36 +16,107 @@ const KEY_OWNER_USER_ID = "owner_user_id";
 const KEY_DIR_PATTERNS = "directory_patterns";
 const KEY_CERT_FINGERPRINTS = "certificate_fingerprints";
 
-export async function loadSecrets(): Promise<SecretKeys> {
-  const botToken = (await keytar.getPassword(SERVICE_NAME, KEY_BOT_TOKEN)) ?? "";
-  const ownerChatId = (await keytar.getPassword(SERVICE_NAME, KEY_OWNER_CHAT_ID)) ?? "";
-  const ownerUserId = (await keytar.getPassword(SERVICE_NAME, KEY_OWNER_USER_ID)) ?? "";
-  const directoryPatterns = await keytar.getPassword(SERVICE_NAME, KEY_DIR_PATTERNS);
-  const certificateFingerprints = await keytar.getPassword(SERVICE_NAME, KEY_CERT_FINGERPRINTS);
+type KeytarLike = Pick<typeof keytar, "getPassword" | "setPassword">;
 
-  if (!botToken.trim() || !ownerChatId.trim() || !ownerUserId.trim()) {
-    throw new Error("缺少必要的鑰匙圈設定值");
-  }
+type LoadSecretsOptions = {
+  env?: NodeJS.ProcessEnv | undefined;
+  keytar?: Pick<KeytarLike, "getPassword"> | undefined;
+  runtimeConfig?: RuntimeConfig | undefined;
+};
 
+type RequiredSecretKey = "botToken" | "ownerChatId" | "ownerUserId";
+
+const REQUIRED_SECRET_ENV_KEYS: Record<RequiredSecretKey, keyof NodeJS.ProcessEnv> = {
+  botToken: "TELETOPAZ_BOT_TOKEN",
+  ownerChatId: "TELETOPAZ_OWNER_CHAT_ID",
+  ownerUserId: "TELETOPAZ_OWNER_USER_ID"
+};
+
+const REQUIRED_SECRET_KEYCHAIN_KEYS: Record<RequiredSecretKey, string> = {
+  botToken: KEY_BOT_TOKEN,
+  ownerChatId: KEY_OWNER_CHAT_ID,
+  ownerUserId: KEY_OWNER_USER_ID
+};
+
+function coerceOptionalString(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+async function loadRequiredSecret(
+  key: RequiredSecretKey,
+  env: NodeJS.ProcessEnv,
+  keytarLike: Pick<KeytarLike, "getPassword">
+): Promise<string | undefined> {
+  const envValue = coerceOptionalString(env[REQUIRED_SECRET_ENV_KEYS[key]]);
+  if (envValue) return envValue;
+  return coerceOptionalString(await keytarLike.getPassword(SERVICE_NAME, REQUIRED_SECRET_KEYCHAIN_KEYS[key]));
+}
+
+async function loadLegacyRuntimeConfigFromKeychain(
+  keytarLike: Pick<KeytarLike, "getPassword">
+): Promise<RuntimeConfig> {
   return {
-    botToken: botToken.trim(),
-    ownerChatId: ownerChatId.trim(),
-    ownerUserId: ownerUserId.trim(),
-    directoryPatterns: directoryPatterns?.trim() || undefined,
-    certificateFingerprints: certificateFingerprints?.trim() || undefined
+    directoryPatterns: coerceOptionalString(await keytarLike.getPassword(SERVICE_NAME, KEY_DIR_PATTERNS)),
+    certificateFingerprints: coerceOptionalString(await keytarLike.getPassword(SERVICE_NAME, KEY_CERT_FINGERPRINTS))
   };
 }
 
-export async function saveSecret(key: keyof SecretKeys, value: string): Promise<void> {
-  const map: Record<keyof SecretKeys, string> = {
+export async function loadConfiguredRuntimeConfig(
+  options: Pick<LoadSecretsOptions, "env" | "keytar" | "runtimeConfig"> = {}
+): Promise<RuntimeConfig> {
+  if (options.runtimeConfig) {
+    return options.runtimeConfig;
+  }
+
+  const env = options.env ?? process.env;
+  const keytarLike = options.keytar ?? keytar;
+  return loadRuntimeConfig({
+    env,
+    legacyConfigLoader: async () => loadLegacyRuntimeConfigFromKeychain(keytarLike)
+  });
+}
+
+export async function loadSecrets(options: LoadSecretsOptions = {}): Promise<SecretKeys> {
+  const env = options.env ?? process.env;
+  const keytarLike = options.keytar ?? keytar;
+  const runtimeConfig = await loadConfiguredRuntimeConfig({
+    env,
+    keytar: keytarLike,
+    runtimeConfig: options.runtimeConfig
+  });
+
+  const botToken = await loadRequiredSecret("botToken", env, keytarLike);
+  const ownerChatId = await loadRequiredSecret("ownerChatId", env, keytarLike);
+  const ownerUserId = await loadRequiredSecret("ownerUserId", env, keytarLike);
+
+  if (!botToken || !ownerChatId || !ownerUserId) {
+    throw new Error("缺少必要的 Telegram 設定值；請先執行 setup:secrets 或設定環境變數。");
+  }
+
+  return {
+    botToken,
+    ownerChatId,
+    ownerUserId,
+    directoryPatterns: runtimeConfig.directoryPatterns,
+    certificateFingerprints: runtimeConfig.certificateFingerprints
+  };
+}
+
+export async function saveSecret(key: RequiredSecretKey, value: string): Promise<void> {
+  const map: Record<RequiredSecretKey, string> = {
     botToken: KEY_BOT_TOKEN,
     ownerChatId: KEY_OWNER_CHAT_ID,
-    ownerUserId: KEY_OWNER_USER_ID,
-    directoryPatterns: KEY_DIR_PATTERNS,
-    certificateFingerprints: KEY_CERT_FINGERPRINTS
+    ownerUserId: KEY_OWNER_USER_ID
   };
 
-  await keytar.setPassword(SERVICE_NAME, map[key], value);
+  const normalizedValue = coerceOptionalString(value);
+  if (!normalizedValue) {
+    throw new Error(`${key} cannot be empty`);
+  }
+
+  await keytar.setPassword(SERVICE_NAME, map[key], normalizedValue);
 }
 
 export function getSecretServiceName(): string {
