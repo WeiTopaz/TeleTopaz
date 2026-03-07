@@ -68,6 +68,7 @@ npm start
 1. 安裝 Gemini CLI Core：`npm install -g @google/gemini-cli-core` (或確保在 PATH 中)
 2. 設定 ADC 憑證：`gcloud auth application-default login`
 3. 在 Bot 中使用 `/model` 切換至 Gemini 系列模型，或在 Auto Mode 中將其設為 Core 模型。
+4. 基於安全考量，Gemini 工作階段目前以 **read-only plan mode** 執行；若需要編輯、寫入或 shell 類工具，請改用 Copilot 模型。
 
 ## 安全機制
 

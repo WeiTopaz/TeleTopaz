@@ -11,6 +11,8 @@ export type AiSessionOptions = {
   systemPrompt?: string;
   hooks?: Record<string, unknown>;
   workingDirectory?: string;
+  skillDirectories?: string[];
+  approvalMode?: "default" | "auto_edit" | "yolo" | "plan";
 };
 
 export type AiProviderInfo = {

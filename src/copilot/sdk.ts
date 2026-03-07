@@ -11,6 +11,8 @@ export type CopilotSessionOptions = {
   systemPrompt?: string;
   hooks?: Record<string, unknown>;
   workingDirectory?: string;
+  skillDirectories?: string[];
+  approvalMode?: "default" | "auto_edit" | "yolo" | "plan";
 };
 
 export type CopilotProviderInfo = {
@@ -124,7 +126,9 @@ export class CopilotSdkClient {
       model: options.model,
       ...(options.systemPrompt ? { systemMessage: { content: options.systemPrompt } } : {}),
       ...(options.hooks ? { hooks: options.hooks } : {}),
-      ...(options.workingDirectory ? { workingDirectory: options.workingDirectory } : {})
+      ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
+      ...(options.workingDirectory ? { workingDirectory: options.workingDirectory } : {}),
+      ...(options.skillDirectories?.length ? { skillDirectories: options.skillDirectories } : {})
     };
 
     const session = await this.client.createSession(sessionOptions);

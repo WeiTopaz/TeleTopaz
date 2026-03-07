@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { TelegramApi } from "./telegram/api.js";
 import { InlineKeyboardMarkup, TelegramCallbackQuery, TelegramMessage, TelegramUpdate } from "./telegram/types.js";
 import { loadSecrets } from "./config/secrets.js";
@@ -59,6 +60,8 @@ function isWriteOrDeleteTool(name: string | undefined): boolean {
 }
 
 const TOOL_CONFIRM_TIMEOUT_MS = 120_000;
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const BUNDLED_SKILLS_PATH = path.join(APP_ROOT, ".github", "skills");
 
 function stripAttachmentContext(prompt: string): string {
   const marker = "\n\n附件圖片：\n";
@@ -246,7 +249,15 @@ export class TeleTopazService {
       
       const session = await client.createSession({
         model: routerModel,
-        systemPrompt: "You are an intent classifier. Determine if the user's request is simple (greetings, quick queries, simple docs, web search, casual chat) or complex (coding, reasoning, summarization, long writing, analysis, planning, structural decomposition). Return 'ROUTER' for simple and 'CORE' for complex. Return ONLY the label."
+        approvalMode: "plan",
+        workingDirectory: APP_ROOT,
+        systemPrompt: "You are an intent classifier. Determine if the user's request is simple (greetings, quick queries, simple docs, web search, casual chat) or complex (coding, reasoning, summarization, long writing, analysis, planning, structural decomposition). Never call tools. Return 'ROUTER' for simple and 'CORE' for complex. Return ONLY the label.",
+        hooks: {
+          onPreToolUse: async (input: any) => {
+            logger.warn("Classifier tool use denied", { tool: input?.toolName });
+            return { permissionDecision: "deny" };
+          }
+        }
       });
 
       let classification = "CORE"; // Default to Core for safety
@@ -1026,6 +1037,7 @@ export class TeleTopazService {
       await this.safeSend(chatId, "專案不在允許列表中。", undefined);
       return;
     }
+    const canonicalCwd = await fs.realpath(cwd).catch(() => path.resolve(cwd));
 
     const state = this.getOrCreateState(chatId);
     if (state.session) {
@@ -1053,12 +1065,16 @@ export class TeleTopazService {
 
       let memoryContext: string | undefined;
       try {
-        memoryContext = await this.sessionMemory.buildContext({ chatId, workDir: cwd });
+        memoryContext = await this.sessionMemory.buildContext({ chatId, workDir: canonicalCwd });
       } catch (err) {
-        logger.warn("Load session memory failed", { chatId, project: path.basename(cwd), err });
+        logger.warn("Load session memory failed", { chatId, project: path.basename(canonicalCwd), err });
       }
 
-      const systemPrompt = await buildPersonaPrompt(cwd, state.provider, memoryContext);
+      const systemPrompt = await buildPersonaPrompt(canonicalCwd, state.provider, memoryContext);
+      const skillDirectories = state.provider === "copilot"
+        ? await this.collectSkillDirectories(canonicalCwd)
+        : undefined;
+      const approvalMode = state.provider === "gemini" ? "plan" : undefined;
 
       const models = await this.getModels(state.provider);
       const useModel = model ?? state.model ?? getDefaultModel(models);
@@ -1068,8 +1084,10 @@ export class TeleTopazService {
 
       const session = await client.createSession({
         model: useModel,
-        workingDirectory: cwd,
+        workingDirectory: canonicalCwd,
+        ...(approvalMode ? { approvalMode } : {}),
         ...(systemPrompt ? { systemPrompt } : {}),
+        ...(skillDirectories?.length ? { skillDirectories } : {}),
         hooks: {
           onPreToolUse: async (input: any) => {
             const toolName: string | undefined = input?.toolName;
@@ -1120,7 +1138,7 @@ export class TeleTopazService {
 
       state.client = client;
       state.session = session;
-      state.workDir = cwd;
+      state.workDir = canonicalCwd;
       state.model = useModel;
       state.processing = false;
       state.pendingTasks = [];
@@ -1138,7 +1156,7 @@ export class TeleTopazService {
         state.processingTimer = undefined;
       }
 
-      const projectLabel = path.basename(cwd);
+      const projectLabel = path.basename(canonicalCwd);
       const modelLabel = state.mode === "auto"
         ? `Auto (R:${state.routerModel} / C:${state.coreModel})`
         : `${state.provider}:${useModel}`;
@@ -1696,11 +1714,44 @@ export class TeleTopazService {
   private async findSkillsPath(cwd: string): Promise<string | undefined> {
     const candidate = path.join(cwd, ".github", "skills");
     try {
-      const stat = await (await import("node:fs/promises")).stat(candidate);
-      return stat.isDirectory() ? candidate : undefined;
+      const workspaceRoot = await fs.realpath(cwd);
+      const resolved = await fs.realpath(candidate);
+      const stat = await fs.stat(resolved);
+      if (!stat.isDirectory()) {
+        return undefined;
+      }
+
+      const relative = path.relative(workspaceRoot, resolved);
+      const staysWithinWorkspace = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+      if (!staysWithinWorkspace) {
+        logger.warn("Ignoring skills path outside workspace", { cwd: workspaceRoot, resolved });
+        return undefined;
+      }
+
+      return resolved;
     } catch {
       return undefined;
     }
+  }
+
+  private async collectSkillDirectories(cwd: string): Promise<string[] | undefined> {
+    const directories = new Set<string>();
+
+    try {
+      const bundled = await fs.stat(BUNDLED_SKILLS_PATH);
+      if (bundled.isDirectory()) {
+        directories.add(BUNDLED_SKILLS_PATH);
+      }
+    } catch {
+      // ignore missing bundled skills
+    }
+
+    const workspaceSkills = await this.findSkillsPath(cwd);
+    if (workspaceSkills) {
+      directories.add(workspaceSkills);
+    }
+
+    return directories.size > 0 ? Array.from(directories) : undefined;
   }
 
   private createResultKey(chatId: number): string {

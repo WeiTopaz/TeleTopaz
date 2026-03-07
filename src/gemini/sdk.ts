@@ -8,20 +8,6 @@ type PreToolUseInput = { toolName: string | undefined; toolArgs: Record<string, 
 type PreToolUseResult = { permissionDecision: string; modifiedArgs?: unknown };
 type PreToolUseHook = (input: PreToolUseInput) => Promise<PreToolUseResult>;
 
-/** Tool names that perform write/delete/shell operations requiring approval. */
-const DANGEROUS_TOOLS = new Set([
-  "write_file", "edit_file", "replace", "create_file", "delete_file",
-  "rename_file", "move_file", "run_shell_command", "shell", "bash", "exec",
-]);
-
-function isDangerousTool(name: string | undefined): boolean {
-  if (!name) return false;
-  const lower = name.toLowerCase();
-  if (DANGEROUS_TOOLS.has(lower)) return true;
-  if (/\b(write|delete|remove|create|edit|replace|patch|mv|rm|shell|exec|bash)\b/i.test(lower)) return true;
-  return false;
-}
-
 function isRetryableError(err: Error | null): boolean {
   if (!err) return false;
   const message = err.message;
@@ -193,8 +179,8 @@ export class GeminiSdkSession implements AiSession {
   private spawnGeminiCli(prompt: string, signal: AbortSignal): Promise<string> {
     return new Promise((resolve, reject) => {
       const fullPrompt = this.buildFullPrompt();
-      
-      const args = ["-m", this.options.model, "--output-format", "stream-json", "--approval-mode", "yolo"];
+      const approvalMode = this.options.approvalMode ?? "yolo";
+      const args = ["-m", this.options.model, "--output-format", "stream-json", "--approval-mode", approvalMode];
       const cwd = this.options.workingDirectory || process.cwd();
 
       const child = spawn("gemini", args, {
@@ -258,8 +244,7 @@ export class GeminiSdkSession implements AiSession {
             const toolName = event.tool_name as string | undefined;
             this.emit({ type: "tool.execution_start", data: { toolName, toolArgs: event.parameters } });
 
-            // For dangerous tools, SIGSTOP and ask for approval via onPreToolUse
-            if (isDangerousTool(toolName) && this.onPreToolUse && child.pid && !stopped) {
+            if (this.onPreToolUse && child.pid && !stopped) {
               stopped = true;
               try { process.kill(child.pid, "SIGSTOP"); } catch { /* process may have exited */ }
 
