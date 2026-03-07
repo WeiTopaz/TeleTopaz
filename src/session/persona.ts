@@ -17,7 +17,7 @@ async function readOptional(filePath: string): Promise<string | undefined> {
   }
 }
 
-export async function buildPersonaPrompt(cwd: string, provider?: string): Promise<string> {
+export async function buildPersonaPrompt(cwd: string, provider?: string, memoryContext?: string): Promise<string> {
   const sections: string[] = [];
   const providerName = provider === "gemini" ? "Google Gemini" : "GitHub Copilot SDK";
   sections.push(`你是 ${providerName} 的代理。工作目錄：${cwd}`);
@@ -39,6 +39,10 @@ export async function buildPersonaPrompt(cwd: string, provider?: string): Promis
 
   if (!found) {
     sections.push("\n請以繁體中文回覆，保持務實、清楚並遵守安全護欄。\n");
+  }
+
+  if (memoryContext?.trim()) {
+    sections.push(`\n# 持久化會話記憶\n${memoryContext.trim()}`);
   }
 
   sections.push("\n請以繁體中文回覆。\n");

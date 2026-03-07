@@ -17,6 +17,7 @@ import { quotaService } from "./services/quota.js";
 import type { AiEvent, AiClient, ProviderType } from "./provider/types.js";
 import { AgentContext, ToolTracking, PendingTask } from "./session/state.js";
 import { getIconPool, pickIcon } from "./session/emoji.js";
+import { SessionMemoryStore } from "./session/memory-store.js";
 import { buildPersonaPrompt } from "./session/persona.js";
 import { buildPromptChunks, composePrompt } from "./session/prompt.js";
 import { reencodePhoto } from "./util/images.js";
@@ -59,6 +60,12 @@ function isWriteOrDeleteTool(name: string | undefined): boolean {
 
 const TOOL_CONFIRM_TIMEOUT_MS = 120_000;
 
+function stripAttachmentContext(prompt: string): string {
+  const marker = "\n\n附件圖片：\n";
+  const index = prompt.indexOf(marker);
+  return (index >= 0 ? prompt.slice(0, index) : prompt).trim();
+}
+
 const COMMANDS = [
   "/start",
   "/help",
@@ -80,6 +87,7 @@ export class TeleTopazService {
   private readonly toolParams = new Map<string, string>();
   private readonly toolResults = new Map<string, string>();
   private readonly pendingToolConfirmations = new Map<string, { resolve: (allowed: boolean) => void }>();
+  private readonly sessionMemory = new SessionMemoryStore();
   private modelsCache = new Map<ProviderType, { models: string[]; fetchedAt: number }>();
   private readonly modelsTtlMs = 5 * 60 * 1000;
   private running = true;
@@ -348,6 +356,7 @@ export class TeleTopazService {
     state.completionPending = false;
     state.receivedAssistantMessage = false;
     state.lastAssistantMessageHash = undefined;
+    state.lastAssistantMessageText = undefined;
 
     // Auto mode: classify intent and switch provider/model accordingly
     if (state.mode === "auto" && state.routerModel && state.coreModel) {
@@ -1042,7 +1051,14 @@ export class TeleTopazService {
     try {
       await client.start();
 
-      const systemPrompt = await buildPersonaPrompt(cwd, state.provider);
+      let memoryContext: string | undefined;
+      try {
+        memoryContext = await this.sessionMemory.buildContext({ chatId, workDir: cwd });
+      } catch (err) {
+        logger.warn("Load session memory failed", { chatId, project: path.basename(cwd), err });
+      }
+
+      const systemPrompt = await buildPersonaPrompt(cwd, state.provider, memoryContext);
 
       const models = await this.getModels(state.provider);
       const useModel = model ?? state.model ?? getDefaultModel(models);
@@ -1115,6 +1131,7 @@ export class TeleTopazService {
       state.pendingEvents = [];
       state.dispatchingEvents = false;
       state.toolMessageMap.clear();
+      state.lastAssistantMessageText = undefined;
       state.personaLoaded = true;
       if (state.processingTimer) {
         clearTimeout(state.processingTimer);
@@ -1181,6 +1198,7 @@ export class TeleTopazService {
           }
           state.awaitingReply = false;
           state.receivedAssistantMessage = true;
+          state.lastAssistantMessageText = content;
           if (state.processingTimer) {
             clearTimeout(state.processingTimer);
             state.processingTimer = undefined;
@@ -1207,11 +1225,14 @@ export class TeleTopazService {
       case "session.idle": {
         state.processing = false;
         const completedPrompt = state.activePrompt;
+        const completedReply = state.lastAssistantMessageText;
         state.activePrompt = undefined;
+        state.lastAssistantMessageText = undefined;
         if (state.processingTimer) {
           clearTimeout(state.processingTimer);
           state.processingTimer = undefined;
         }
+        await this.persistSessionMemory(chatId, state.workDir, completedPrompt, completedReply);
         if (state.pendingTasks.length === 0) {
           if (state.awaitingReply) {
             state.completionPending = true;
@@ -1230,6 +1251,7 @@ export class TeleTopazService {
         state.completionPending = false;
         state.receivedAssistantMessage = false;
         state.lastAssistantMessageHash = undefined;
+        state.lastAssistantMessageText = undefined;
         const processing = await this.safeSend(chatId, `⏳處理中：${nextPrompt.slice(0, 80)}`, state.replyToMessageId);
         state.processingMessageId = processing?.message_id;
         const policy = await this.guardrailsPromise;
@@ -1288,6 +1310,35 @@ export class TeleTopazService {
       }
     }
     return undefined;
+  }
+
+  private async persistSessionMemory(
+    chatId: number,
+    workDir: string | undefined,
+    prompt: string | undefined,
+    reply: string | undefined
+  ): Promise<void> {
+    if (!workDir) return;
+
+    const entries: Array<{ role: "user" | "assistant"; text: string | undefined }> = [
+      { role: "user", text: prompt ? stripAttachmentContext(prompt) : undefined },
+      { role: "assistant", text: reply }
+    ];
+
+    for (const entry of entries) {
+      const text = entry.text?.trim();
+      if (!text) continue;
+      try {
+        await this.sessionMemory.append({ chatId, workDir }, entry.role, text);
+      } catch (err) {
+        logger.warn("Session memory append failed", {
+          chatId,
+          project: path.basename(workDir),
+          role: entry.role,
+          err
+        });
+      }
+    }
   }
 
   private async handleToolStart(chatId: number, state: AgentContext, payload: unknown): Promise<void> {
@@ -1590,6 +1641,7 @@ export class TeleTopazService {
       processingTimer: undefined,
       receivedAssistantMessage: false,
       lastAssistantMessageHash: undefined,
+      lastAssistantMessageText: undefined,
       promptCycles: 0,
       starredModels: [],
       cachedDirs: [],
@@ -1811,6 +1863,7 @@ export class TeleTopazService {
     }
 
     await this.withTimeout(Promise.all(tasks).then(() => undefined), 12000).catch((err) => logger.error(err));
+    await this.withTimeout(logger.flush(), 4000).catch((err) => logger.error("Log flush failed", err));
     process.exit(0);
   }
 

@@ -51,14 +51,25 @@ function formatArgs(args: unknown[]): string {
 export class Logger {
   private level: LogLevel;
   private writeQueue: Promise<void> = Promise.resolve();
-  private readonly logDir = "logs";
+  private logDir: string;
 
   constructor(level?: LogLevel) {
     this.level = level ?? parseLogLevel(process.env.TELETOPAZ_LOG_LEVEL);
+    this.logDir = process.env.TELETOPAZ_LOG_DIR?.trim() || "logs";
   }
 
   setLevel(level: LogLevel): void {
     this.level = level;
+  }
+
+  setLogDir(logDir: string): void {
+    const normalized = logDir.trim();
+    if (!normalized) return;
+    this.logDir = normalized;
+  }
+
+  async flush(): Promise<void> {
+    await this.writeQueue;
   }
 
   private shouldLog(level: LogLevel): boolean {
@@ -83,25 +94,25 @@ export class Logger {
   debug(...args: unknown[]): void {
     if (!this.shouldLog("debug")) return;
     this.writeToFile("debug", args);
-    console.debug(...args.map(redactUnknown));
+    console.debug(`[${toLocalISOString(new Date())}] [DEBUG]`, ...args.map(redactUnknown));
   }
 
   info(...args: unknown[]): void {
     if (!this.shouldLog("info")) return;
     this.writeToFile("info", args);
-    console.log(...args.map(redactUnknown));
+    console.log(`[${toLocalISOString(new Date())}] [INFO]`, ...args.map(redactUnknown));
   }
 
   warn(...args: unknown[]): void {
     if (!this.shouldLog("warn")) return;
     this.writeToFile("warn", args);
-    console.warn(...args.map(redactUnknown));
+    console.warn(`[${toLocalISOString(new Date())}] [WARN]`, ...args.map(redactUnknown));
   }
 
   error(...args: unknown[]): void {
     if (!this.shouldLog("error")) return;
     this.writeToFile("error", args);
-    console.error(...args.map(redactUnknown));
+    console.error(`[${toLocalISOString(new Date())}] [ERROR]`, ...args.map(redactUnknown));
   }
 }
 

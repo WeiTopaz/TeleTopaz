@@ -8,7 +8,8 @@ async function main(): Promise<void> {
   await bot.start();
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   logger.error("啟動失敗", err);
+  await logger.flush();
   process.exit(1);
 });

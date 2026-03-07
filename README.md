@@ -6,6 +6,7 @@
 
 - **雙供應商支援**：同時整合 GitHub Copilot 與 Google Gemini，可依需求自由切換。
 - **智慧路由 (Auto Mode)**：自動分析使用者意圖，簡單查詢使用輕量模型 (Router)，複雜任務切換至強力模型 (Core)，優化速度與成本。
+- **安全持久化記憶**：以工作區為作用域保存最近對話脈絡，寫入前自動遮罩敏感資訊。
 - **安全沙盒**：在 macOS 上透過 `sandbox-exec` 隔離執行環境，並嚴格限制檔案寫入權限。
 - **人機協作護欄**：敏感操作（如寫入、刪除檔案）需使用者即時按鈕確認。
 - **隱私優先**：內建敏感資訊遮蔽 (Redaction) 與 Prompt Injection 防護。
@@ -34,6 +35,9 @@ npm run setup:secrets
 | `TELETOPAZ_DIRECTORY_PATTERNS` | ✅ | 逗號分隔的 Glob 模式，定義可選工作區 |
 | `TELETOPAZ_CERT_FINGERPRINTS` | — | 逗號分隔的 SHA-256 指紋（TLS pinning） |
 | `TELETOPAZ_SANDBOX` | — | 設為 `0`/`false`/`off` 以停用 macOS 沙盒（預設啟用） |
+| `TELETOPAZ_DATA_DIR` | — | App data 目錄；用於保存已遮罩的持久化會話記憶，預設為 `~/.teletopaz` |
+| `TELETOPAZ_LOG_LEVEL` | — | Logger 等級，支援 `debug` / `info` / `warn` / `error` |
+| `TELETOPAZ_LOG_DIR` | — | 自訂日誌輸出目錄，預設為專案下的 `logs/` |
 
 > 所有值透過 `npm run setup:secrets` 寫入 macOS Keychain，也可在 CI 直接設定環境變數。
 
@@ -68,17 +72,19 @@ npm start
 
 ## 安全機制
 
-- **沙盒 (macOS)**：限制寫入權限僅限於 `TELETOPAZ_DIRECTORY_PATTERNS` 展開的目錄、系統暫存區及 Copilot 設定檔。
+- **沙盒 (macOS)**：限制寫入權限僅限於 `TELETOPAZ_DIRECTORY_PATTERNS` 展開的目錄、系統暫存區、TeleTopaz app data 目錄及 Copilot 設定檔。
 - **操作確認**：工具執行 `write`、`delete`、`edit` 等高風險操作時，會發送 Telegram 按鈕要求確認。
 - **Guardrails**：
     - 拒絕未經授權的目錄存取。
     - 過濾 API Keys、私鑰等敏感資訊。
     - 偵測 Prompt Injection 攻擊。
+- **持久化記憶**：最近對話脈絡會先經 `redactStrict` 遮罩後，再寫入 app data 目錄，不寫回使用者工作區。
 
 ## 專案結構
 
 - `src/bot.ts`: 機器人核心邏輯與訊息處理
 - `src/session/`: 對話狀態、Prompt 組裝與 Persona 管理
+- `src/session/memory-store.ts`: 已遮罩的持久化會話記憶
 - `src/gemini/`: Gemini CLI 封裝實作
 - `src/copilot/`: Copilot SDK 整合
 - `src/guardrails/`: 安全護欄規則與評估

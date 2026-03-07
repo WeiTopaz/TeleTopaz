@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { resolveAppDataDir } from "./util/app-data.js";
 
 const SANDBOX_ENV = "TELETOPAZ_SANDBOX";
 const SANDBOX_ACTIVE_ENV = "TELETOPAZ_SANDBOX_ACTIVE";
@@ -44,6 +45,7 @@ const SENSITIVE_READ_PATHS = [
 
 export function buildSandboxProfile(options?: SandboxProfileOptions): string {
   const home = os.homedir();
+  const appDataDir = resolveAppDataDir();
 
   // Determine writable project path: prefer explicit workDir, then common ancestor of patterns
   let projectWritePath: string | undefined = options?.workDir;
@@ -81,6 +83,7 @@ export function buildSandboxProfile(options?: SandboxProfileOptions): string {
     "; Allow normal macOS temp/cache paths used by processes",
     "(allow file-write* (subpath \"/private/var/folders\"))",
     "(allow file-write* (subpath \"/var/folders\"))",
+    `(allow file-write* (subpath "${appDataDir}"))`,
     "",
     "; Allow Copilot/CLI config write locations",
     `(allow file-write* (subpath "${home}/Library/Application Support/GitHub Copilot"))`,

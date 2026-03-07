@@ -45,6 +45,7 @@ export type AgentContext = {
   processingTimer: NodeJS.Timeout | undefined;
   receivedAssistantMessage: boolean;
   lastAssistantMessageHash: string | undefined;
+  lastAssistantMessageText: string | undefined;
   promptCycles: number;
   starredModels: string[];
   cachedDirs: string[];
