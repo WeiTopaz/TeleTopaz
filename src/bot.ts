@@ -22,14 +22,31 @@ import { SessionMemoryStore } from "./session/memory-store.js";
 import { buildPersonaPrompt } from "./session/persona.js";
 import { buildPromptChunks, composePrompt } from "./session/prompt.js";
 import { reencodePhoto } from "./util/images.js";
-import { isConnectionDisposedError, isTelegramReactionInvalid } from "./util/errors.js";
-import { loadSupportedModels, getDefaultModel, getAllModels } from "./config/models.js";
+import {
+  consumeRepeatedLog,
+  extractNetworkErrorSummary,
+  isConnectionDisposedError,
+  isTelegramReactionInvalid,
+  isTransientTelegramNetworkError
+} from "./util/errors.js";
+import {
+  DEFAULT_CORE_MODEL,
+  DEFAULT_ROUTER_MODEL,
+  formatModelEntry as formatConfiguredModelEntry,
+  getAllModels,
+  getDefaultModel,
+  loadSupportedModels,
+  normalizeModelEntry as normalizeConfiguredModelEntry,
+  parseModelEntry as parseConfiguredModelEntry
+} from "./config/models.js";
 
 const MESSAGE_LIMIT = 4096;
 const PENDING_LIMIT = 15;
 const MAX_ATTACHMENTS = 8;
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const TOOL_PREVIEW_LEN = 150;
+const POLLING_ERROR_DEDUPE_WINDOW_MS = 15_000;
+const ROUTER_MODEL_PATTERN = /(?:^|[-.])(mini|flash|lite)(?:$|[-.])/i;
 
 /** Tool names that perform write or delete operations requiring human confirmation. */
 const WRITE_DELETE_TOOLS = new Set([
@@ -57,6 +74,10 @@ function isWriteOrDeleteTool(name: string | undefined): boolean {
   // Split by separators (underscore, hyphen, dot, space) and check segments
   const segments = lower.split(/[_\-.\s]+/);
   return segments.some(s => WRITE_DELETE_KEYWORDS.has(s));
+}
+
+function isRouterCandidateModel(model: string): boolean {
+  return ROUTER_MODEL_PATTERN.test(model);
 }
 
 const TOOL_CONFIRM_TIMEOUT_MS = 120_000;
@@ -93,6 +114,7 @@ export class TeleTopazService {
   private readonly sessionMemory = new SessionMemoryStore();
   private modelsCache = new Map<ProviderType, { models: string[]; fetchedAt: number }>();
   private readonly modelsTtlMs = 5 * 60 * 1000;
+  private readonly transientPollingErrorLogState = { suppressedCount: 0 };
   private running = true;
   private offset = 0;
   private shuttingDown = false;
@@ -199,15 +221,25 @@ export class TeleTopazService {
           await this.handleUpdate(update);
         }
       } catch (err) {
-        const msg = String(err);
-        if (
-          msg.includes("ETIMEDOUT") ||
-          (err as any)?.code === "ETIMEDOUT" ||
-          (err as any)?.name === "AggregateError"
-        ) {
-          logger.warn("Polling connection timeout (retrying...)", msg);
+        const summary = extractNetworkErrorSummary(err);
+        if (summary && isTransientTelegramNetworkError(err)) {
+          const decision = consumeRepeatedLog(
+            this.transientPollingErrorLogState,
+            summary,
+            Date.now(),
+            POLLING_ERROR_DEDUPE_WINDOW_MS
+          );
+          if (decision.shouldLog) {
+            const suffix = decision.suppressedCount > 0
+              ? `（已省略 ${decision.suppressedCount} 次重複錯誤）`
+              : "";
+            logger.warn(`Polling 網路異常（重試中）：${summary}${suffix}`);
+          }
         } else {
           logger.error("Polling error", err);
+          if (summary) {
+            logger.warn(`Polling 網路摘要：${summary}`);
+          }
         }
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
@@ -242,8 +274,7 @@ export class TeleTopazService {
 
   private async classifyIntent(chatId: number, text: string, routerModel: string): Promise<"ROUTER" | "CORE"> {
     try {
-      const provider = this.inferProvider(routerModel);
-      const providerType = provider.toLowerCase().includes("google") || provider.toLowerCase().includes("gemini") ? "gemini" as ProviderType : "copilot" as ProviderType;
+      const providerType = this.resolveProviderForModel(routerModel);
       const client = this.createProviderClient(providerType);
       await client.start();
       
@@ -398,12 +429,14 @@ export class TeleTopazService {
     if (state.processingTimer) clearTimeout(state.processingTimer);
     state.processingTimer = setTimeout(() => {
       if (state.processingMessageId) {
-        const providerName = state.provider === "gemini" ? "Gemini" : "Copilot";
+        const modelEntry = state.model
+          ? this.formatModelEntry(state.provider, state.model)
+          : this.formatResolvedModelEntry(state.coreModel ?? state.routerModel);
         this.api
           .editMessageText({
             chat_id: chatId,
             message_id: state.processingMessageId,
-            text: this.prepareOutgoingText(chatId, `⏳處理中…仍在等待 ${providerName} 回覆`),
+            text: this.prepareOutgoingText(chatId, `⏳處理中…仍在等待 ${modelEntry} 回覆`),
             parse_mode: "MarkdownV2"
           })
           .catch((err) => logger.warn("Update processing message failed", err));
@@ -726,7 +759,11 @@ export class TeleTopazService {
 
     if (arg === "auto") {
       state.mode = "auto";
-      await this.safeSend(chatId, `✅ 已切換為自動模式 (Auto Mode)\nRouter: ${state.routerModel}\nCore: ${state.coreModel}`, undefined);
+      await this.safeSend(
+        chatId,
+        `✅ 已切換為自動模式 (Auto Mode)\nRouter: ${this.formatResolvedModelEntry(state.routerModel)}\nCore: ${this.formatResolvedModelEntry(state.coreModel)}`,
+        undefined
+      );
       return;
     }
 
@@ -764,7 +801,7 @@ export class TeleTopazService {
       
       if (selected) {
         state.routerModel = selected.model;
-        await this.safeSend(chatId, `Router 模型已設定為：${selected.provider}:${selected.model}`, undefined);
+        await this.safeSend(chatId, `Router 模型已設定為：${selected.entry}`, undefined);
         // Return to main menu instead of chaining
         await this.sendUnifiedModelList(chatId);
       }
@@ -779,7 +816,7 @@ export class TeleTopazService {
 
       if (selected) {
         state.coreModel = selected.model;
-        await this.safeSend(chatId, `Core 模型已設定為：${selected.provider}:${selected.model}`, undefined);
+        await this.safeSend(chatId, `Core 模型已設定為：${selected.entry}`, undefined);
         await this.sendUnifiedModelList(chatId);
       }
       return;
@@ -807,8 +844,8 @@ export class TeleTopazService {
     
     // Config Section (always visible or only when auto? User asked to simplify, let's keep it visible for quick access)
     keyboard.inline_keyboard.push([
-      { text: `⚙️ Router: ${state.routerModel}`, callback_data: "do.model:config_router" },
-      { text: `⚙️ Core: ${state.coreModel}`, callback_data: "do.model:config_core" }
+      { text: `⚙️ Router: ${this.formatResolvedModelEntry(state.routerModel)}`, callback_data: "do.model:config_router" },
+      { text: `⚙️ Core: ${this.formatResolvedModelEntry(state.coreModel)}`, callback_data: "do.model:config_core" }
     ]);
 
     // Manual Models Section
@@ -818,7 +855,7 @@ export class TeleTopazService {
       const row = keyboard.inline_keyboard[keyboard.inline_keyboard.length - 1]!;
       // Highlight if active AND in manual mode
       const isActive = state.mode === "manual" && state.model === m.model && state.provider === m.provider;
-      const label = isActive ? `🟢 ${m.provider}:${m.model}` : `${m.provider}:${m.model}`;
+      const label = isActive ? `🟢 ${m.entry}` : m.entry;
       row.push({ text: label, callback_data: `do.model:pick.manual:${index}` });
     });
 
@@ -827,25 +864,17 @@ export class TeleTopazService {
 
   private async sendRouterModelList(chatId: number): Promise<void> {
     const allModels = getAllModels();
-    // Filter for "cheap/fast" models? Or just show all? 
-    // Requirement says: "Router模型(用於一般打招呼、簡單查詢...)"
-    // And user restricted list. Copilot has gpt-5-mini. Gemini has flash.
-    // Let's filter for "mini" or "flash" or "lite".
-    const candidates = allModels.filter(m => m.model.includes("mini") || m.model.includes("flash") || m.model.includes("lite"));
+    const candidates = allModels.filter((m) => isRouterCandidateModel(m.model));
     
     const keyboard: InlineKeyboardMarkup = { inline_keyboard: [] };
     const state = this.getOrCreateState(chatId);
     
     candidates.forEach((m, index) => {
-        // We need original index from getAllModels to be safe, or lookup by name?
-        // Let's use the index within `candidates` and handle it, or pass the name?
-        // Passing name might exceed callback data limit (64 chars).
-        // Let's map back to global index.
-        const globalIndex = allModels.indexOf(m);
-        if (index % 1 === 0) keyboard.inline_keyboard.push([]);
-        const row = keyboard.inline_keyboard[keyboard.inline_keyboard.length - 1]!;
-        const label = m.model === state.routerModel ? `🟢 ${m.provider}:${m.model}` : `${m.provider}:${m.model}`;
-        row.push({ text: label, callback_data: `do.model:pick.router:${globalIndex}` });
+      const globalIndex = allModels.indexOf(m);
+      if (index % 1 === 0) keyboard.inline_keyboard.push([]);
+      const row = keyboard.inline_keyboard[keyboard.inline_keyboard.length - 1]!;
+      const label = m.model === state.routerModel ? `🟢 ${m.entry}` : m.entry;
+      row.push({ text: label, callback_data: `do.model:pick.router:${globalIndex}` });
     });
     
     await this.safeSend(chatId, "請選擇 **Router 模型** (一般查詢、意圖判斷)：", undefined, keyboard);
@@ -853,20 +882,17 @@ export class TeleTopazService {
 
   private async sendCoreModelList(chatId: number): Promise<void> {
     const allModels = getAllModels();
-    // Filter for "strong" models? "pro", "codex", "opus".
-    // Or just exclude "mini" / "flash-lite"? (Keep flash-preview as it is powerful enough?)
-    // Let's exclude "lite" and "mini".
-    const candidates = allModels.filter(m => !m.model.includes("mini") && !m.model.includes("lite"));
+    const candidates = allModels.filter((m) => !isRouterCandidateModel(m.model));
 
     const keyboard: InlineKeyboardMarkup = { inline_keyboard: [] };
     const state = this.getOrCreateState(chatId);
 
     candidates.forEach((m, index) => {
-        const globalIndex = allModels.indexOf(m);
-        if (index % 1 === 0) keyboard.inline_keyboard.push([]);
-        const row = keyboard.inline_keyboard[keyboard.inline_keyboard.length - 1]!;
-        const label = m.model === state.coreModel ? `🟢 ${m.provider}:${m.model}` : `${m.provider}:${m.model}`;
-        row.push({ text: label, callback_data: `do.model:pick.core:${globalIndex}` });
+      const globalIndex = allModels.indexOf(m);
+      if (index % 1 === 0) keyboard.inline_keyboard.push([]);
+      const row = keyboard.inline_keyboard[keyboard.inline_keyboard.length - 1]!;
+      const label = m.model === state.coreModel ? `🟢 ${m.entry}` : m.entry;
+      row.push({ text: label, callback_data: `do.model:pick.core:${globalIndex}` });
     });
 
     await this.safeSend(chatId, "請選擇 **Core 模型** (深度問答、代碼、寫作)：", undefined, keyboard);
@@ -960,9 +986,7 @@ export class TeleTopazService {
     const stats = await quotaService.checkQuota(String(chatId));
     const usage = `${stats.stats.daily}/${stats.stats.monthly}`;
 
-    const modelLabel = state.mode === "auto"
-      ? `Auto (R:${state.provider}:${state.routerModel} / C:${this.resolveProviderForModel(state.coreModel ?? "")}:${state.coreModel})`
-      : `${state.provider}:${state.model}`;
+    const modelLabel = this.formatStateModelLabel(state);
     const projectLabel = state.workDir ? path.basename(state.workDir) : "未選擇";
 
     const lines = [
@@ -977,7 +1001,7 @@ export class TeleTopazService {
     if (stats.stats.byModel && Object.keys(stats.stats.byModel).length > 0) {
       lines.push("📈 模型統計 (本月):");
       for (const [m, c] of Object.entries(stats.stats.byModel)) {
-        lines.push(`  • ${m}: ${c}`);
+        lines.push(`  • ${this.formatStoredModelKey(m)}: ${c}`);
       }
     }
 
@@ -1157,9 +1181,7 @@ export class TeleTopazService {
       }
 
       const projectLabel = path.basename(canonicalCwd);
-      const modelLabel = state.mode === "auto"
-        ? `Auto (R:${state.routerModel} / C:${state.coreModel})`
-        : `${state.provider}:${useModel}`;
+      const modelLabel = this.formatStateModelLabel(state, useModel);
       await this.safeSend(chatId, `💎TeleTopaz in ${projectLabel} / 系統訊息\n\n📂 ${projectLabel}\n⚙️ ${modelLabel}\n🔌 已連線`, undefined, this.buildNavKeyboard());
     } catch (err) {
       await client.stop().catch((stopErr) => {
@@ -1542,9 +1564,7 @@ export class TeleTopazService {
     const hasHeader = hasPoolHeader || hasEmojiHeader;
 
     const projectLabel = state.workDir ? path.basename(state.workDir) : "尚未選擇專案";
-    const messageSource = source ?? (state.mode === "auto"
-      ? `${state.provider}:${state.model ?? state.coreModel}`
-      : `${state.provider}:${state.model ?? "未設定"}`);
+    const messageSource = source ?? this.formatActiveSource(state);
     const header = `💎TeleTopaz in ${projectLabel} / ${messageSource}`;
 
     const withHeader = hasHeader ? text : `${header}\n${text}`;
@@ -1641,8 +1661,8 @@ export class TeleTopazService {
       workDir: undefined,
       model: undefined,
       mode: "auto",
-      routerModel: "gpt-5-mini",
-      coreModel: "gemini-3-pro-preview",
+      routerModel: DEFAULT_ROUTER_MODEL,
+      coreModel: DEFAULT_CORE_MODEL,
       processing: false,
       pendingTasks: [],
       resetting: false,
@@ -1790,8 +1810,37 @@ export class TeleTopazService {
   }
 
   private resolveProviderForModel(model: string): ProviderType {
-    if (model.includes("gemini")) return "gemini";
-    return "copilot";
+    return parseConfiguredModelEntry(model).provider;
+  }
+
+  private formatModelEntry(provider: ProviderType, model: string): string {
+    return formatConfiguredModelEntry(provider, model);
+  }
+
+  private formatResolvedModelEntry(model: string | undefined): string {
+    if (!model) return "未設定";
+    return this.formatModelEntry(this.resolveProviderForModel(model), model);
+  }
+
+  private formatStoredModelKey(model: string): string {
+    if (model.includes(":")) {
+      return normalizeConfiguredModelEntry(model, this.formatResolvedModelEntry(parseConfiguredModelEntry(model).model));
+    }
+    return this.formatResolvedModelEntry(model);
+  }
+
+  private formatStateModelLabel(state: AgentContext, manualModelOverride?: string): string {
+    if (state.mode === "auto") {
+      return `Auto (R:${this.formatResolvedModelEntry(state.routerModel)} / C:${this.formatResolvedModelEntry(state.coreModel)})`;
+    }
+    return this.formatModelEntry(state.provider, manualModelOverride ?? state.model ?? "未設定");
+  }
+
+  private formatActiveSource(state: AgentContext): string {
+    if (state.mode === "auto") {
+      return this.formatResolvedModelEntry(state.model ?? state.coreModel ?? state.routerModel);
+    }
+    return this.formatModelEntry(state.provider, state.model ?? "未設定");
   }
 
   private buildNavKeyboard(): InlineKeyboardMarkup {
@@ -1811,9 +1860,7 @@ export class TeleTopazService {
     const ownerName = await this.fetchOwnerName();
     const state = this.getOrCreateState(chatId);
     const projectLabel = state.workDir ? path.basename(state.workDir) : "未選擇";
-    const modelLabel = state.mode === "auto"
-      ? `Auto (R:${state.routerModel} / C:${state.coreModel})`
-      : `${state.provider}:${state.model ?? "未設定"}`;
+    const modelLabel = this.formatStateModelLabel(state);
     
     const text = [
       "💎TeleTopaz in " + projectLabel + " / 系統訊息",

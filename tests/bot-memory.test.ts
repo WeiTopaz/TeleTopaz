@@ -112,7 +112,7 @@ describe("TeleTopazService session memory", () => {
     state.provider = "gemini";
 
     (service as unknown as { loadAllowedDirectories: () => Promise<string[]> }).loadAllowedDirectories = vi.fn().mockResolvedValue(["/tmp/project"]);
-    (service as unknown as { getModels: () => Promise<string[]> }).getModels = vi.fn().mockResolvedValue(["gemini-3-pro-preview"]);
+    (service as unknown as { getModels: () => Promise<string[]> }).getModels = vi.fn().mockResolvedValue(["gemini-3.1-pro-preview"]);
     (service as unknown as { createProviderClient: () => AiClient }).createProviderClient = vi.fn().mockReturnValue(client);
     (service as unknown as { safeSend: () => Promise<undefined> }).safeSend = vi.fn().mockResolvedValue(undefined);
     (service as unknown as { sessionMemory: { buildContext: (scope: unknown) => Promise<string | undefined> } }).sessionMemory = {
@@ -121,7 +121,7 @@ describe("TeleTopazService session memory", () => {
 
     await (service as unknown as {
       createSession: (chatId: number, cwd: string, model?: string) => Promise<void>;
-    }).createSession(1, "/tmp/project", "gemini-3-pro-preview");
+    }).createSession(1, "/tmp/project", "gemini-3.1-pro-preview");
 
     expect(client.createSession).toHaveBeenCalledOnce();
     const options = vi.mocked(client.createSession).mock.calls[0]?.[0] as { approvalMode?: string } | undefined;

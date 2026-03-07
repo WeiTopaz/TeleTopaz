@@ -2,182 +2,199 @@
 
 ## 結論摘要
 
-`REF_telebot_project` 的真正亮點有三個：**持久化記憶**、**可觀測性較高的日誌輸出**，以及 **技能 / 工具知識可被工作階段直接利用**。  
-但 TeleTopaz 目前在 **雙供應商抽象、自動路由、安全沙盒、人機確認、輸出遮罩、Prompt Guardrails、模組化程度** 上都明顯更完整。
+`REF_telebot_project` 並不是整體上比 TeleTopaz 更好；它的強項集中在 **模型清單正規化**、**暫時性網路錯誤的可觀測性**、**持久化記憶**、以及 **技能知識導入**。  
+TeleTopaz 仍然在 **雙供應商抽象、自動路由、macOS sandbox、人機確認、敏感資訊遮罩、Prompt Guardrails、測試覆蓋** 上明顯更完整。
 
-因此，本次策略不是「照搬 REF」，而是只吸收它值得保留的部分，並改造成更符合 TeleTopaz 的安全版實作：
+因此，本次不是「把 REF 全搬進來」，而是採取 **TeleTopaz 主導、REF 擷取優點** 的策略：
 
-1. **採納：持久化會話記憶**
-   - 導入為「**工作區作用域、已遮罩、寫入 app data 目錄**」的安全版本。
-   - 避免 REF 直接把 `memory/`、`memory_archive/` 寫進使用者工作區的缺點。
-2. **採納：日誌可觀測性補強**
-   - 保留 TeleTopaz 原本的非阻塞寫檔與 redaction。
-   - 補上 console 時間戳/等級、可配置 log 目錄、可 flush。
-3. **採納：技能 / 工具知識的安全導入**
-   - 讓 Copilot session 直接載入 TeleTopaz 內建與工作區自有的 `.github/skills`。
-   - 不複製任何 skill 檔案到使用者專案，避免 workspace 汙染。
-4. **不採納：REF 的工作區內記憶壓縮排程與單供應商耦合**
-   - 這些設計對 TeleTopaz 會增加 repo 污染、回歸風險與安全面。
+1. **採納 REF 的模型清單與 `provider:model` 概念**，但把 CLI 標籤縮寫為 `ctcli` / `gmcli`，同時保留 TeleTopaz 內部 `copilot` / `gemini` 抽象，避免大範圍重構。
+2. **採納 REF 對 transient network error 的可觀測性優點**，補上 Telegram polling 的網路錯誤摘要與重複日誌抑制，提升穩定性追查能力。
+3. **保留先前已證明有效的安全版導入**：app-data 型持久化記憶、非阻塞 logger、skills 直接載入但不污染工作區。
+4. **不導入 REF 的副作用設計**：工作區內 `memory/`、`memory_archive/`、複製 `additional_skills/`、同步 I/O、單供應商耦合。
 
-## 詳細對照
+---
 
-| 面向 | REF 的優點 | REF 的缺點 | TeleTopaz 原狀 | 決策 |
+## 詳細對照：優點、缺點與導入決策
+
+| 面向 | REF 的優點 | REF 的缺點 | TeleTopaz 現況 | 本次決策 |
 |---|---|---|---|---|
-| 架構 | 記憶模組獨立、測試覆蓋不差 | 整體仍偏單體、與單供應商路徑耦合 | Provider / session / guardrails / sandbox 分層清楚 | 保留 TeleTopaz 架構，不回退 |
-| 記憶系統 | 有持久化、多層摘要、實體索引概念 | 直接寫進工作區，容易污染專案與被誤提交 | 僅有執行期 session，缺少跨重啟延續 | **採納核心價值，但改成 app data + redaction 版** |
-| 日誌 | console 有時間戳，輸出較容易追查 | 同步寫檔、忽略寫檔錯誤，較不利穩定性 | 已有 redaction 與非阻塞寫檔，但 console 可觀測性較弱 | **採納可觀測性，保留 TeleTopaz 非阻塞寫檔** |
-| 技能 / 工具知識 | 會把 `additional_skills/` 與技能目錄概念帶進工作階段，讓代理更理解本地工具與流程 | 透過複製檔案到工作區實現，容易覆寫使用者檔案、污染 repo；若直接把工具文件內嵌成高信任 prompt，也有 indirect prompt injection 風險 | 會讀 AGENTS / MEMORY，但原本沒有真的把 skillDirectories 傳進 Copilot session | **採納能力本身，但改成「直接載入內建 / 工作區 skillDirectories」的無污染版本** |
-| Guardrails | deny/allow 規則結構清楚 | 防護深度較淺，沒有 TeleTopaz 現有整合強度 | 內建 prompt injection、敏感資訊與工具輸出防護 | 不回退；維持 TeleTopaz 版本 |
-| 安全 | 有基本遮罩意識 | 無沙盒、無工作區寫入最小權限、無 Telegram 工具確認 | 有 sandbox、人機確認、輸出遮罩、目錄白名單 | 完全保留 TeleTopaz 優勢 |
-| 測試 | REF 在記憶/日誌上有明確單元測試 | 整體邊界條件仍偏窄 | TeleTopaz 已有 guardrails、sandbox、prompt 等測試 | 延續 TeleTopaz 測試風格並補足新功能 |
+| 模型管理 | 以單一 `provider:model` 字串維護模型，切換與顯示一致 | provider 命名綁死 `copilotCLI` / `geminiCLI`，不利 TeleTopaz 內部抽象延續 | 先前可用模型與 UI 顯示分散，provider 顯示為 `copilot` / `gemini` | **採納**：改為 REF 式 entry 管理，但 UI 顯示用 `ctcli` / `gmcli`，內部 provider 照舊 |
+| 服務穩定性 | 會抽取 transient network error 摘要，並抑制短時間重複 polling 日誌 | 整體仍偏單供應商流程，無法直接沿用到 TeleTopaz 全系統 | TeleTopaz 本來會重試 polling，但錯誤摘要較粗、重複 warn 噪音較大 | **採納**：補入 network summary + repeated log dedupe，保留既有輪詢重試流程 |
+| 處理邏輯 | Event queue 與 prompt queue 邏輯直接、容易追 | 佇列容量較小，且工作區副作用較多 | TeleTopaz 既有 event queue、assistant message 去重、PENDING_LIMIT=15，處理流較完整 | 保留 TeleTopaz 流程，不回退 |
+| 持久化記憶 | 有跨重啟脈絡延續能力 | 直接寫進使用者工作區，容易污染 repo、被誤提交 | TeleTopaz 已改為 app data + redaction + workspace scope | 保留 TeleTopaz 安全版，不回退 |
+| 日誌與可觀測性 | console timestamp 與 level 明確，網路錯誤較容易追 | 同步寫檔與靜默吞錯風險較高 | TeleTopaz 已具非阻塞寫檔、redaction、flush | 保留 TeleTopaz logger，僅吸收 REF 可觀測性優點 |
+| 技能 / 工具知識 | 會將本地技能帶入 session，降低純靠預訓練的風險 | 透過複製檔案到工作區實現，會污染使用者 repo | TeleTopaz 已直接載入 bundled/workspace skillDirectories，並拒絕越界 symlink | 保留 TeleTopaz 安全作法 |
+| 安全 | 有基本敏感資訊意識 | 無 sandbox、無工具確認、無最小權限工作區寫入模型 | TeleTopaz 有 sandbox、human approval、guardrails、redaction | 完全保留 TeleTopaz 優勢 |
+| 測試 | 模型與記憶模組具一定測試 | 整體覆蓋面仍窄於 TeleTopaz | TeleTopaz 既有 sandbox / memory / guardrails / provider tests | 延續 TeleTopaz 測試風格並補上新測試 |
 
-## 本次已採納並落地的 REF 優勢
+---
 
-### 1. 安全版持久化會話記憶
+## 針對服務穩定性與處理邏輯的重點分析
 
-已導入 `src/session/memory-store.ts`，但設計上刻意**不複製** REF 的工作區內 `memory/` 目錄策略，而是改成：
+### REF 值得借鏡的地方
 
-- 預設寫入 `~/.teletopaz/session-memory`
-- 可透過 `TELETOPAZ_DATA_DIR` 覆寫
-- 以 **chatId + workDir hash** 做工作區隔離
-- 寫入前一律經過 `redactStrict`
-- 每筆內容會壓平空白、截斷長度、限制保留筆數
-- 建立 session 時會把最近的已遮罩脈絡附加到 system prompt
+1. **模型 entry 正規化**
+   - REF 以單一 `provider:model` entry 當作 UI 與設定來源，避免「模型名稱在一處、provider 在另一處」的顯示不一致。
+   - 這對 TeleTopaz 的 `/model`、`/info`、連線提示、處理中訊息都很有價值。
 
-這樣保留了 REF「跨重啟延續脈絡」的優點，同時避免：
+2. **暫時性網路錯誤的摘要化與去重**
+   - REF 會從巢狀錯誤中抽取 `ETIMEDOUT`、`ECONNRESET`、`ENOTFOUND` 等網路代碼，並在短時間內抑制重複 polling log。
+   - 這不會改變核心邏輯，但會顯著降低 log 噪音，提升線上追查效率。
 
-- 在使用者 repo 產生可提交檔案
-- 把敏感資料直接落地
-- 對現有工作區流程造成干擾
+3. **本地技能知識導入**
+   - 讓 session 知道專案內的技能與工具規範，比單靠模型預訓練更穩。
+   - 這點 TeleTopaz 已用更安全的方式落地，因此不需改回 REF 的複製檔案版本。
 
-### 2. 日誌可觀測性補強
+### REF 不應帶入 TeleTopaz 的地方
 
-TeleTopaz 原本 logger 已比 REF 更安全，因為它有：
+1. **工作區副作用太重**
+   - `memory/`、`memory_archive/`、`additional_skills/` 複製行為都會直接寫進使用者 repo。
+   - 對 TeleTopaz 這種強調最小權限與受控工作區的設計來說，這是明確退步。
 
-- 非阻塞 Promise queue
-- 檔案寫入前 redaction
-- 分級輸出
+2. **安全邊界較弱**
+   - REF 缺少 TeleTopaz 既有的 sandbox、工具確認、guardrails 與目錄白名單整合。
+   - 若直接照搬，會破壞本專案「先安全、再能力」的基調。
 
-本次再補上 REF 值得借鏡的部分：
+3. **單供應商視角較重**
+   - REF 的流程雖然清楚，但其實是圍繞單一 provider 路徑去寫。
+   - TeleTopaz 需要維持 Copilot / Gemini 雙供應商與 Auto Mode，不適合退回單一路徑思維。
 
-- console log 加上本地時區 ISO timestamp 與 level
-- 新增 `setLogDir()` 與 `TELETOPAZ_LOG_DIR`
-- 新增 `flush()`，可在結束流程前把佇列寫完
+---
 
-也就是說，**採納了 REF 的「易追查」優點，但沒有帶入它的同步阻塞與靜默吞錯風險**。
+## 本次已導入的 REF 優勢
 
-### 3. 技能 / 工具知識安全導入
+### 1. 模型清單改採 REF inventory，但用 TeleTopaz 風格安全落地
 
-REF 的另一個可取處，是它有意識地把技能帶進 session，讓代理不是只靠模型預訓練，而是能參照本地 skill 規範。  
-但 REF 的做法是把 `additional_skills/` 直接複製進使用者工作區，這對 TeleTopaz 而言風險太高。
+已將模型清單統一為：
 
-本輪 TeleTopaz 改成更安全的等價作法：
+- `ctcli:gpt-5.4`
+- `ctcli:gpt-5-mini`
+- `ctcli:claude-opus-4.6`
+- `ctcli:claude-sonnet-4.6`
+- `gmcli:gemini-3.1-pro-preview`
 
-- Copilot session 會直接載入 **TeleTopaz 內建 `.github/skills`**
-- 若使用者工作區本身有 `.github/skills`，也會一併載入
-- 若工作區的 `.github/skills` 透過 symlink 指向工作區外，會直接拒絕載入
-- Auto-routing 的 classifier session 會固定使用安全工作目錄，並以 **read-only plan mode + deny-all tool hook** 避免工具繞行
-- 全程**不複製任何 skill 文件進使用者 repo**
+實作重點：
 
-這樣保留了 REF「讓工作階段理解本地技能與工具約束」的優點，同時避免：
+- `src/config/models.ts`
+  - 以 entry 形式集中維護模型清單
+  - 新增 `formatModelEntry()`、`parseModelEntry()`、`normalizeModelEntry()`
+  - `TELETOPAZ_DEFAULT_MODEL` 同時接受 raw model name 與 `provider:model`
+- `src/bot.ts`
+  - `/model`、`/info`、歡迎訊息、連線訊息、處理中提示、輸出 header 都統一顯示 `ctcli:model` / `gmcli:model`
+  - Auto Mode 會同時正確顯示 Router/Core 兩側的 provider label，而不再誤用 `state.provider`
 
-- 覆寫使用者現有 `.github/` 內容
-- 把機器人附帶檔案寫入使用者版本庫
-- 因複製流程造成不必要寫入權限與 side effect
-- 透過工作區工具文件進行 indirect prompt injection
+這保留了 REF「單一顯示來源」的優點，同時避免把內部 provider 型別也一起改壞。
 
-### 4. 沙盒權限同步補強
+### 2. Telegram polling 的 transient network error 摘要與去重
 
-因為新增了 app data 型持久化記憶，本次同步補上 sandbox 白名單：
+本次在 `src/util/errors.ts` 與 `src/bot.ts` 補上：
 
-- 允許寫入 `~/.teletopaz`（或 `TELETOPAZ_DATA_DIR` 指定位置）
+- 巢狀錯誤中的網路代碼抽取
+- `api.telegram.org:443` 等目標摘要顯示
+- 短時間相同 transient error 的重複 log 抑制
 
-這是必要的最小調整，避免功能導入後繞過既有安全模型。
+效益：
+
+- 服務遇到短暫網路抖動時，仍維持原本 retry 行為
+- log 不再因連續相同 timeout 被洗版
+- 真正需要追查時，能更快看到具體錯誤代碼與目標位址
+
+這是 REF 在穩定性觀察面最值得帶回來、且對 TeleTopaz 最低風險的一個優點。
+
+### 3. 既有安全版導入維持不退步
+
+TeleTopaz 目前已保留且持續受益於下列 REF 衍生優勢，但都以更安全方式落地：
+
+- `src/session/memory-store.ts`
+  - app data + redaction + workspace scope 的持久化記憶
+- `src/util/logger.ts`
+  - timestamp / level / flush / configurable log dir，但保留非阻塞寫檔
+- `src/bot.ts` + `.github/skills`
+  - 直接載入 skills，不複製檔案進使用者工作區
+
+---
 
 ## 明確不導入的 REF 設計
 
-### 不導入 1：直接在工作區生成 `memory/`、`memory_archive/`
+### 不導入 1：工作區內 `memory/`、`memory_archive/`
 
 原因：
 
 - 容易污染使用者專案
 - 容易被誤提交到 git
-- 對多工作區、多專案切換較不乾淨
-- 與 TeleTopaz 現有「工具在受控工作區操作、機器人自身狀態獨立保存」方向不一致
+- 與 TeleTopaz 既有最小權限與 app-data 狀態分離設計衝突
 
-### 不導入 2：完整搬入每日壓縮排程
+### 不導入 2：複製 `additional_skills/` 到工作區
 
-REF 的每日壓縮排程概念不差，但目前不是最小改動路線。  
-本輪先導入「安全持久化 + recent context 注入」，等實際使用量證明需要，再決定是否增加摘要壓縮層。
+原因：
 
-### 不導入 3：降低 TeleTopaz 既有安全門檻
+- 會修改使用者 repo
+- 可能覆寫現有 `.github/` 內容
+- 讓「啟動 session」變成有副作用的操作
+- 增加 indirect prompt injection 面積
 
-本專案既有優勢必須保留：
+### 不導入 3：同步寫檔與靜默吞錯
 
-- 雙供應商（Copilot / Gemini）
-- Auto routing
-- macOS sandbox
-- 人機確認高風險工具
-- guardrails + redaction
+原因：
 
-REF 在這些面向沒有超越 TeleTopaz，因此不應反向退化。
+- REF 在 logger 層面較容易造成阻塞與可觀測性假象
+- TeleTopaz 既有 Promise queue + flush + redaction 實作更適合長期服務穩定性
 
-### 不導入 4：把 `additional_skills/` 複製進使用者工作區，或把 `TOOLS.md` 直接內嵌成高信任 prompt
+### 不導入 4：單供應商耦合流程
 
-REF 的 `copyAdditionalSkills()` 對單一、可控的個人工作流有便利性，但在 TeleTopaz 中不適合作為預設：
+原因：
 
-- 會修改使用者工作區檔案
-- 可能覆寫既有 `.github/` 內容
-- 需要額外寫入權限，與最小權限方向相衝
-- 會讓「啟動 session」變成具有副作用的操作
-- 若把 `TOOLS.md` 原文直接併進 system prompt，還會帶入 indirect prompt injection 風險
+- 會破壞 TeleTopaz 的雙供應商與 Auto routing 優勢
+- 無法符合本專案既有 provider abstraction
 
-因此本專案只採納「讓 session 能安全讀到 skills」這個能力，不採納「複製檔案進 repo」或「把工作區工具文件直接升格為高信任指令」這種做法。
+---
 
 ## 本次修改後的實際收益
 
-1. **服務重啟後仍能保留最近脈絡**
-2. **不同工作區的記憶彼此隔離**
-3. **持久化資料先遮罩再寫入，降低敏感資訊風險**
-4. **日誌更容易追查，但仍保有非阻塞寫檔**
-5. **Copilot session 能直接利用內建 / 工作區技能，而且會拒絕工作區外部的 symlink skills**
-6. **Auto-routing 分類流程不會繞過既有工具安全邊界**
-7. **工作區白名單改用 canonical realpath，比對與展開都能阻擋 symlink escape**
-8. **sandbox 仍維持最小權限模型**
+1. **模型清單與 UI 顯示來源一致**
+2. **`/model`、`/info`、工作階段連線提示都統一為 `provider:model`**
+3. **CLI provider 標籤更精簡，改為 `ctcli` / `gmcli`**
+4. **Auto Mode 的 Router/Core 顯示更正確，不再混用目前 session provider**
+5. **Telegram polling 遇到 transient network issue 時更容易追查**
+6. **重複 timeout / reset 日誌不再大量洗版**
+7. **既有 sandbox、guardrails、人機確認與持久化記憶優勢完整保留**
+
+---
 
 ## 測試與驗證
 
-本次新增/調整測試重點：
+本輪新增或調整的重點測試：
 
-- `tests/session-memory.test.ts`
-  - 驗證工作區隔離
-  - 驗證 redaction 後才持久化
-  - 驗證 recent context 組裝
+- `tests/models.test.ts`
+  - 驗證 REF 模型清單已同步到 TeleTopaz
+  - 驗證 `ctcli` / `gmcli` 顯示格式
+  - 驗證 `TELETOPAZ_DEFAULT_MODEL` 支援 `provider:model`
+- `tests/bot-model-display.test.ts`
+  - 驗證 `/info` 與模型選單顯示為 `ctcli:model` / `gmcli:model`
+  - 驗證舊模型已不再出現在選單
+- `tests/bot-polling.test.ts`
+  - 驗證 transient polling error 會被去重
+  - 驗證 log 會帶出網路摘要
+- `tests/errors.test.ts`
+  - 驗證 network summary 抽取與 repeated log 判斷
 - `tests/bot-memory.test.ts`
-  - 驗證建立 session 時會帶入持久化記憶
-  - 驗證一輪對話完成後會落地記憶
-- `tests/logger.test.ts`
-  - 驗證 console timestamp/level
-  - 驗證自訂 log 目錄與 flush
-- `tests/persona.test.ts`
-  - 驗證工作區 `TOOLS.md` 不會被直接內嵌進 system prompt
-- `tests/bot-memory.test.ts`
-  - 驗證 Copilot session 會帶入內建與工作區 skillDirectories
-  - 驗證 symlink 到工作區外部的 skills 會被拒絕
-- `tests/bot-classifier.test.ts`
-  - 驗證 classifier session 會使用安全工作目錄
-  - 驗證 classifier session 會以 read-only plan mode 啟動
-  - 驗證 classifier session 會 deny 所有工具呼叫
+  - 驗證 Gemini 端仍以新核心模型建立 session
 - `tests/gemini-sdk.test.ts`
-  - 驗證 Gemini CLI 會把指定 approval mode 傳入實際命令列
-  - 驗證所有 `tool_use` 都會先經過 `onPreToolUse`
-- `tests/directories.test.ts`
-  - 驗證白名單展開會拒絕指向工作區外的 symlink
-  - 驗證 allowed directory 比對採 canonical real path
-- `tests/sandbox-profile.test.ts`
-  - 驗證 app data 路徑被正確放入 sandbox 白名單
+  - 將 Gemini 測試模型名同步到 `gemini-3.1-pro-preview`
+
+驗證結果：
+
+- `npm run build` ✅
+- `npm run test` ✅
+
+---
 
 ## 最終評語
 
-REF_telebot_project **不是整體上比 TeleTopaz 更好**，而是它在「記憶持久化」、「操作可觀測性」以及「技能 / 工具知識導入」三個局部設計上有可借鏡之處。  
-本次修改採用的是 **TeleTopaz 主導、REF 擷取優點** 的策略：只導入高價值、低入侵、可安全落地的部分，避免把 REF 的工作區污染、同步 I/O、檔案複製副作用、單供應商耦合與安全邊界較弱等問題一起帶進來。
+REF_telebot_project 的價值，不在於它整體比 TeleTopaz 更成熟，而在於它有幾個**局部設計點非常實用**：
+
+- 模型 entry 正規化
+- transient network error 的摘要與去重
+- 記憶與技能知識的導入意識
+
+本次修改遵循的原則是：**只把 REF 真正能提升穩定性與操作一致性的部分帶進來，其他會削弱安全、造成工作區副作用、或破壞雙供應商架構的部分，一律不導入。**

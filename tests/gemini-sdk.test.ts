@@ -62,7 +62,7 @@ describe("GeminiSdkSession", () => {
   }
 
   it("hooks events and emits assistant.message and session.idle on send", async () => {
-    const options: AiSessionOptions = { model: "gemini-3-pro-preview" };
+    const options: AiSessionOptions = { model: "gemini-3.1-pro-preview" };
     const geminiSession = new GeminiSdkSession(options);
     
     expect(geminiSession).toBeDefined();
@@ -72,7 +72,7 @@ describe("GeminiSdkSession", () => {
   it("extracts onPreToolUse hook from options", () => {
     const hook = vi.fn();
     const options: AiSessionOptions = {
-      model: "gemini-3-pro-preview",
+      model: "gemini-3.1-pro-preview",
       hooks: { onPreToolUse: hook }
     };
     const session = new GeminiSdkSession(options);
@@ -81,7 +81,7 @@ describe("GeminiSdkSession", () => {
   });
 
   it("creates session without hooks gracefully", () => {
-    const options: AiSessionOptions = { model: "gemini-3-pro-preview" };
+    const options: AiSessionOptions = { model: "gemini-3.1-pro-preview" };
     const session = new GeminiSdkSession(options);
     expect(session).toBeDefined();
   });
@@ -92,7 +92,7 @@ describe("GeminiSdkSession", () => {
     const processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true as never);
     const hook = vi.fn().mockResolvedValue({ permissionDecision: "deny" });
     const session = new GeminiSdkSession({
-      model: "gemini-3-pro-preview",
+      model: "gemini-3.1-pro-preview",
       hooks: { onPreToolUse: hook }
     });
 
@@ -122,7 +122,7 @@ describe("GeminiSdkSession", () => {
     const mockChild = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mockChild.child as any);
     const session = new GeminiSdkSession({
-      model: "gemini-3-pro-preview",
+      model: "gemini-3.1-pro-preview",
       approvalMode: "plan"
     });
 
@@ -138,14 +138,14 @@ describe("GeminiSdkSession", () => {
   });
 
   it("abort handles AbortController", async () => {
-    const options: AiSessionOptions = { model: "gemini-3-pro-preview" };
+    const options: AiSessionOptions = { model: "gemini-3.1-pro-preview" };
     const geminiSession = new GeminiSdkSession(options);
     
     await expect(geminiSession.abort()).resolves.not.toThrow();
   });
 
   it("destroy handles AbortController", async () => {
-    const options: AiSessionOptions = { model: "gemini-3-pro-preview" };
+    const options: AiSessionOptions = { model: "gemini-3.1-pro-preview" };
     const geminiSession = new GeminiSdkSession(options);
     
     await expect(geminiSession.destroy()).resolves.not.toThrow();

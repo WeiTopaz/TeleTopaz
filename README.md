@@ -52,10 +52,20 @@ npm start
 |---|---|
 | `/start`、`/help` | 顯示歡迎訊息與功能選單 |
 | `/project` | 選擇工作目錄 (Workspace) |
-| `/model` | 設定 AI 模型與路由模式 (Auto/Manual) |
+| `/model` | 設定 AI 模型與路由模式 (Auto/Manual，顯示格式為 `ctcli:model` / `gmcli:model`) |
 | `/info` (或 `/i`) | 檢視目前狀態、模型與資源使用量 |
 | `/clear` | 清除對話歷史與附件圖片，並重啟工作階段 |
 | `/quit` | 安全關閉機器人 |
+
+### 目前內建模型
+
+- `ctcli:gpt-5.4`
+- `ctcli:gpt-5-mini`
+- `ctcli:claude-opus-4.6`
+- `ctcli:claude-sonnet-4.6`
+- `gmcli:gemini-3.1-pro-preview`
+
+> Auto Mode 預設會以 `ctcli:gpt-5-mini` 作為 Router、`gmcli:gemini-3.1-pro-preview` 作為 Core。
 
 ## AI 供應商設定
 
@@ -63,7 +73,7 @@ npm start
 本專案預設使用 `@github/copilot-sdk`。首次啟動時需依照 Log 指示進行裝置驗證 (Device Auth)。
 
 ### 2. Google Gemini (選用)
-若要使用 Gemini 模型 (如 `gemini-3-pro`)，需確保環境中可執行 `gemini` 指令：
+若要使用 Gemini 模型 (如 `gmcli:gemini-3.1-pro-preview`)，需確保環境中可執行 `gemini` 指令：
 
 1. 安裝 Gemini CLI Core：`npm install -g @google/gemini-cli-core` (或確保在 PATH 中)
 2. 設定 ADC 憑證：`gcloud auth application-default login`

@@ -55,8 +55,7 @@ export class GeminiSdkClient implements AiClient {
     // Return static list as querying CLI is complex without session
     return {
       models: [
-        "gemini-3-pro-preview",
-        "gemini-3-flash-preview"
+        "gemini-3.1-pro-preview"
       ],
       version: "CLI-Wrapper"
     };
