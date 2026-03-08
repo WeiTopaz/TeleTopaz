@@ -988,6 +988,7 @@ export class TeleTopazService {
         `✅ 已切換為自動模式 (Auto Mode)\nRouter: ${this.formatResolvedModelEntry(state.routerModel)}\nCore: ${this.formatResolvedModelEntry(state.coreModel)}`,
         undefined
       );
+      await this.sendStatusFooter(chatId);
       return;
     }
 
@@ -1179,6 +1180,7 @@ export class TeleTopazService {
         undefined,
         this.buildNavKeyboard()
       );
+      await this.sendStatusFooter(chatId);
       return;
     }
     await this.createSession(chatId, selected);
@@ -1240,6 +1242,17 @@ export class TeleTopazService {
       }
     }
 
+    lines.push(
+      "",
+      "📌 指令：",
+      "/project — 選擇工作區",
+      "/model — 切換 AI 模型 (Auto/Manual)",
+      "/info — 說明",
+      "/clear — 清除對話與附件",
+      "/quit — 關閉Bot",
+      "/help — 顯示說明與指令列表"
+    );
+
     const keyboard: InlineKeyboardMarkup = {
       inline_keyboard: [
         [
@@ -1262,6 +1275,7 @@ export class TeleTopazService {
 
     if (!state.workDir || !state.model) {
       await this.safeSend(chatId, "尚未建立工作階段。", undefined);
+      await this.sendStatusFooter(chatId);
       return;
     }
 
@@ -1420,6 +1434,7 @@ export class TeleTopazService {
       const projectLabel = path.basename(canonicalCwd);
       const modelLabel = this.formatStateModelLabel(state, useModel);
       await this.safeSend(chatId, `💎TeleTopaz in ${projectLabel} / 系統訊息\n\n📂 ${projectLabel}\n⚙️ ${modelLabel}\n🔌 已連線`, undefined, this.buildNavKeyboard());
+      await this.sendStatusFooter(chatId);
     } catch (err) {
       await client.stop().catch((stopErr) => {
         if (!isConnectionDisposedError(stopErr)) logger.warn("Stop client failed", stopErr);
@@ -1785,6 +1800,7 @@ export class TeleTopazService {
     } else {
       await this.safeSend(chatId, `${state.sessionIcon} ✅ 任務完成`, state.replyToMessageId);
     }
+    await this.sendStatusFooter(chatId);
   }
 
   private prepareOutgoingRaw(chatId: number, text: string, source?: string): string {
@@ -2095,14 +2111,13 @@ export class TeleTopazService {
     };
   }
 
-  private async sendWelcome(providerInfo: string | undefined, dirs: string[], models: string[], message?: TelegramMessage): Promise<void> {
-    const chatId = Number(this.ownerChatId);
+  private async buildStatusBlock(chatId: number): Promise<string> {
     const ownerName = await this.fetchOwnerName();
     const state = this.getOrCreateState(chatId);
     const projectLabel = state.workDir ? path.basename(state.workDir) : "未選擇";
     const modelLabel = this.formatStateModelLabel(state);
-    
-    const text = [
+
+    return [
       "💎TeleTopaz in " + projectLabel + " / 系統訊息",
       "",
       `👤 ${ownerName}`,
@@ -2117,7 +2132,16 @@ export class TeleTopazService {
       "/quit — 關閉Bot",
       "/help — 顯示說明與指令列表"
     ].join("\n");
+  }
 
+  private async sendStatusFooter(chatId: number): Promise<void> {
+    const text = await this.buildStatusBlock(chatId);
+    await this.safeSend(chatId, text.trim(), undefined, this.buildNavKeyboard());
+  }
+
+  private async sendWelcome(providerInfo: string | undefined, dirs: string[], models: string[], message?: TelegramMessage): Promise<void> {
+    const chatId = Number(this.ownerChatId);
+    const text = await this.buildStatusBlock(chatId);
     await this.safeSend(chatId, text.trim(), message?.message_id, this.buildNavKeyboard());
   }
 
