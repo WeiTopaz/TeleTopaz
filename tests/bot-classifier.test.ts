@@ -33,6 +33,56 @@ describe("TeleTopazService classifyIntent", () => {
     vi.restoreAllMocks();
   });
 
+  it("reuses the classifier client between messages instead of restarting Copilot CLI each time", async () => {
+    vi.useFakeTimers();
+
+    const sessions: AiSession[] = [];
+    const client: AiClient = {
+      start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      createSession: vi.fn().mockImplementation(async () => {
+        let eventHandler: ((event: { type?: string; data?: unknown }) => void) | undefined;
+        const session: AiSession = {
+          onEvent: vi.fn((handler) => {
+            eventHandler = handler;
+          }),
+          send: vi.fn().mockImplementation(async () => {
+            eventHandler?.({ type: "assistant.message", data: { content: "ROUTER" } });
+          }),
+          sendAndWait: vi.fn().mockResolvedValue(undefined),
+          destroy: vi.fn().mockResolvedValue(undefined),
+          abort: vi.fn().mockResolvedValue(undefined)
+        };
+        sessions.push(session);
+        return session;
+      }),
+      queryProviderInfo: vi.fn().mockResolvedValue({})
+    };
+
+    const service = new TeleTopazService(createApi(), "1", "1", 0);
+    const createProviderClient = vi.fn().mockReturnValue(client);
+    (service as unknown as { createProviderClient: () => AiClient }).createProviderClient = createProviderClient;
+
+    const classifyIntent = (service as unknown as {
+      classifyIntent: (chatId: number, text: string, routerModel: string) => Promise<"ROUTER" | "CORE">;
+    }).classifyIntent.bind(service);
+
+    const first = classifyIntent(1, "第一則訊息", "gpt-5-mini");
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(first).resolves.toBe("ROUTER");
+
+    const second = classifyIntent(1, "第二則訊息", "gpt-5-mini");
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(second).resolves.toBe("ROUTER");
+
+    expect(createProviderClient).toHaveBeenCalledTimes(1);
+    expect(client.start).toHaveBeenCalledTimes(1);
+    expect(client.createSession).toHaveBeenCalledTimes(2);
+    expect(client.stop).not.toHaveBeenCalled();
+    expect(sessions).toHaveLength(2);
+    expect(sessions.every((session) => vi.mocked(session.destroy).mock.calls.length === 1)).toBe(true);
+  });
+
   it("creates classifier sessions with tools denied and a safe working directory", async () => {
     vi.useFakeTimers();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});

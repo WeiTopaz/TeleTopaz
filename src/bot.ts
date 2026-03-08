@@ -238,6 +238,8 @@ export class TeleTopazService {
   private modelsCache = new Map<ProviderType, { models: string[]; fetchedAt: number }>();
   private readonly modelsTtlMs = 5 * 60 * 1000;
   private readonly transientPollingErrorLogState = { suppressedCount: 0 };
+  private intentClassifierClient: AiClient | undefined;
+  private intentClassifierProvider: ProviderType | undefined;
   private running = true;
   private offset = 0;
   private shuttingDown = false;
@@ -391,10 +393,9 @@ export class TeleTopazService {
   }
 
   private async classifyIntent(chatId: number, text: string, routerModel: string): Promise<"ROUTER" | "CORE"> {
+    const providerType = this.resolveProviderForModel(routerModel);
     try {
-      const providerType = this.resolveProviderForModel(routerModel);
-      const client = this.createProviderClient(providerType);
-      await client.start();
+      const client = await this.getIntentClassifierClient(providerType);
       
       const session = await client.createSession({
         model: routerModel,
@@ -427,14 +428,51 @@ export class TeleTopazService {
       await new Promise((resolve) => setTimeout(resolve, 30_000));
       
       await session.destroy();
-      await client.stop();
       
       logger.info("Intent classified", { chatId, classification });
       return classification as "ROUTER" | "CORE";
     } catch (err) {
+      await this.resetIntentClassifierClient();
       logger.warn("Classification failed, defaulting to CORE", err);
       return "CORE";
     }
+  }
+
+  private async getIntentClassifierClient(provider: ProviderType): Promise<AiClient> {
+    if (this.intentClassifierClient && this.intentClassifierProvider === provider) {
+      return this.intentClassifierClient;
+    }
+
+    await this.resetIntentClassifierClient();
+
+    const client = this.createProviderClient(provider);
+    try {
+      await client.start();
+    } catch (err) {
+      await client.stop().catch(() => undefined);
+      throw err;
+    }
+
+    this.intentClassifierClient = client;
+    this.intentClassifierProvider = provider;
+    return client;
+  }
+
+  private async resetIntentClassifierClient(): Promise<void> {
+    if (!this.intentClassifierClient) {
+      this.intentClassifierProvider = undefined;
+      return;
+    }
+
+    const client = this.intentClassifierClient;
+    this.intentClassifierClient = undefined;
+    this.intentClassifierProvider = undefined;
+
+    await client.stop().catch((err) => {
+      if (!isConnectionDisposedError(err)) {
+        logger.warn("Stop intent classifier client failed", err);
+      }
+    });
   }
 
   private async handleMessage(message: TelegramMessage): Promise<void> {
@@ -2146,6 +2184,10 @@ export class TeleTopazService {
     this.shuttingDown = true;
     this.running = false;
     const tasks: Promise<void>[] = [];
+
+    if (this.intentClassifierClient) {
+      tasks.push(this.resetIntentClassifierClient());
+    }
 
     for (const state of this.states.values()) {
       if (state.session) {

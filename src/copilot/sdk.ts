@@ -197,7 +197,17 @@ export class CopilotSdkClient {
 
   async start(): Promise<void> {
     const { CopilotClient } = await loadCopilotSdk();
-    const client = new CopilotClient({ auth: { type: "device" } });
+    const options: Record<string, unknown> = {};
+
+    const githubToken =
+      process.env.COPILOT_GITHUB_TOKEN ??
+      process.env.GH_TOKEN ??
+      process.env.GITHUB_TOKEN;
+    if (githubToken) {
+      options.githubToken = githubToken;
+    }
+
+    const client = new CopilotClient(options);
     try {
       await client.start();
       this.client = client;
