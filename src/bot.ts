@@ -1498,6 +1498,7 @@ export class TeleTopazService {
           if (state.completionPending && state.pendingTasks.length === 0) {
             state.completionPending = false;
             await this.sendDoneNotice(chatId, state);
+            await this.sendStatusFooter(chatId);
           }
         }
         return;
@@ -1530,6 +1531,9 @@ export class TeleTopazService {
             state.completionPending = true;
           } else if (!state.receivedAssistantMessage) {
             await this.sendDoneNotice(chatId, { ...state, activePrompt: completedPrompt });
+            await this.sendStatusFooter(chatId);
+          } else {
+            await this.sendStatusFooter(chatId);
           }
           return;
         }
@@ -1800,7 +1804,6 @@ export class TeleTopazService {
     } else {
       await this.safeSend(chatId, `${state.sessionIcon} ✅ 任務完成`, state.replyToMessageId);
     }
-    await this.sendStatusFooter(chatId);
   }
 
   private prepareOutgoingRaw(chatId: number, text: string, source?: string): string {
