@@ -1248,7 +1248,8 @@ export class TeleTopazService {
       `👤 ${ownerName}`,
       `⚙️ ${modelLabel}`,
       `📂 ${projectLabel}`,
-      `📊 使用量：${usage} (今日/本月)`
+      `📊 使用量：${usage} (今日/本月)`,
+      `🔐 操作確認：${state.allowAll ? "全部允許" : "逐次確認"}`
     ];
 
     if (stats.stats.byModel && Object.keys(stats.stats.byModel).length > 0) {
@@ -2144,6 +2145,7 @@ export class TeleTopazService {
       `👤 ${ownerName}`,
       `⚙️ ${modelLabel}`,
       `📂 ${projectLabel}`,
+      `🔐 操作確認：${state.allowAll ? "全部允許" : "逐次確認"}`,
       "",
       "📌 指令：",
       "/project — 選擇工作區",
