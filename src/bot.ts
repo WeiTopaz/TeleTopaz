@@ -214,7 +214,6 @@ function stripAttachmentContext(prompt: string): string {
 }
 
 const COMMANDS = [
-  "/start",
   "/help",
   "/project",
   "/model",
@@ -761,7 +760,6 @@ export class TeleTopazService {
     }
 
     switch (command) {
-      case "/start":
       case "/help":
         await this.sendWelcome(undefined, await this.loadAllowedDirectories(), await this.getModels(this.getOrCreateState(chatId).provider), message);
         return;
@@ -2116,8 +2114,8 @@ export class TeleTopazService {
       "/model — 切換 AI 模型 (Auto/Manual)",
       "/info — 說明",
       "/clear — 清除對話與附件",
-      "/quit — 關閉",
-      "/help — 歡迎畫面"
+      "/quit — 關閉Bot",
+      "/help — 顯示說明與指令列表"
     ].join("\n");
 
     await this.safeSend(chatId, text.trim(), message?.message_id, this.buildNavKeyboard());

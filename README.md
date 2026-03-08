@@ -50,7 +50,7 @@ npm start
 
 | 指令 | 說明 |
 |---|---|
-| `/start`、`/help` | 顯示歡迎訊息與功能選單 |
+| `/help` | 顯示說明與指令列表 |
 | `/project` | 選擇工作目錄 (Workspace) |
 | `/model` | 設定 AI 模型與路由模式 (Auto/Manual，顯示格式為 `ctcli:model` / `gmcli:model`) |
 | `/info` (或 `/i`) | 檢視目前狀態、模型與資源使用量 |
