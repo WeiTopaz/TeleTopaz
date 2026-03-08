@@ -220,6 +220,7 @@ const COMMANDS = [
   "/info",
   "/i",
   "/clear",
+  "/allowall",
   "/quit"
 ];
 
@@ -776,6 +777,9 @@ export class TeleTopazService {
       case "/clear":
         await this.handleClear(chatId);
         return;
+      case "/allowall":
+        await this.handleAllowAllToggle(chatId);
+        return;
       case "/quit":
         if (message.date < this.startTimestamp) return;
         await this.shutdown();
@@ -882,7 +886,19 @@ export class TeleTopazService {
     await this.safeSend(chatId, `${label}\n\n${text}`, replyTo);
   }
 
+  private async handleAllowAllToggle(chatId: number): Promise<void> {
+    const state = this.getOrCreateState(chatId);
+    state.allowAll = !state.allowAll;
+    const statusText = state.allowAll
+      ? "🔓 已切換為「全部允許」模式，工具操作將自動批准，不再逐次詢問。\n再次輸入 /allowall 可回到確認模式。"
+      : "🔒 已切換回「操作確認」模式，高風險操作將逐次詢問。";
+    await this.safeSend(chatId, statusText);
+  }
+
   private async requestInteractiveApproval(chatId: number, label: string, preview: string): Promise<boolean> {
+    const state = this.states.get(chatId);
+    if (state?.allowAll) return true;
+
     const confirmId = crypto.randomUUID();
     const text = `🔧 工具 *${label}* 需要確認：\n\`${preview}\``;
     const keyboard: InlineKeyboardMarkup = {
@@ -1249,6 +1265,7 @@ export class TeleTopazService {
       "/model — 切換 AI 模型 (Auto/Manual)",
       "/info — 說明",
       "/clear — 清除對話與附件",
+      "/allowall — 切換全部允許/操作確認模式",
       "/quit — 關閉Bot",
       "/help — 顯示說明與指令列表"
     );
@@ -1941,7 +1958,8 @@ export class TeleTopazService {
       starredModels: [],
       cachedDirs: [],
       personaLoaded: false,
-      reactionEmojis: null
+      reactionEmojis: null,
+      allowAll: false
     };
 
     this.states.set(chatId, state);
@@ -2132,6 +2150,7 @@ export class TeleTopazService {
       "/model — 切換 AI 模型 (Auto/Manual)",
       "/info — 說明",
       "/clear — 清除對話與附件",
+      "/allowall — 切換全部允許/操作確認模式",
       "/quit — 關閉Bot",
       "/help — 顯示說明與指令列表"
     ].join("\n");

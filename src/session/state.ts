@@ -51,4 +51,5 @@ export type AgentContext = {
   cachedDirs: string[];
   personaLoaded: boolean;
   reactionEmojis: string[] | null;
+  allowAll: boolean;
 };
