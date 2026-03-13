@@ -55,3 +55,4 @@ memory/
 directories.json
 .teletopaz/
 .plan/
+.debug/
