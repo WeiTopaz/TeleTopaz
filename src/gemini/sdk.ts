@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { AiClient, AiSession, AiEvent, AiSessionOptions, AiProviderInfo } from "../provider/types.js";
+import type { AiAttachment, AiClient, AiSession, AiEvent, AiSessionOptions, AiProviderInfo } from "../provider/types.js";
 
 const retryBackoffsMs = [1000, 2000, 5000];
 const CLI_TIMEOUT_MS = 120_000;
@@ -81,13 +81,19 @@ export class GeminiSdkSession implements AiSession {
     this.eventHandler = handler;
   }
 
-  async send(prompt: string): Promise<void> {
-    this.history.push({ role: "user", content: prompt });
+  async send(prompt: string, attachments?: AiAttachment[]): Promise<void> {
+    // Gemini CLI doesn't support native attachments; include file paths in prompt
+    let fullPrompt = prompt;
+    if (attachments?.length) {
+      const paths = attachments.map((a, i) => `${i + 1}. ${a.path}${a.displayName ? ` (${a.displayName})` : ""}`).join("\n");
+      fullPrompt = `${prompt}\n\n附件檔案（可用工具讀取）：\n${paths}`;
+    }
+    this.history.push({ role: "user", content: fullPrompt });
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
 
     try {
-      await this.sendPromptWithRetry(prompt, signal);
+      await this.sendPromptWithRetry(fullPrompt, signal);
     } catch (err) {
       if (signal.aborted) return;
       

@@ -1,10 +1,15 @@
-import { evaluatePromptIgnoringLength } from "../guardrails/guardrails.js";
+import { evaluatePromptWithOptions } from "../guardrails/guardrails.js";
 import type { GuardrailDecision, GuardrailPolicy } from "../guardrails/types.js";
 import type { Attachment } from "./state.js";
 
 export function composePrompt(prompt: string, attachments: Attachment[]): string {
   if (!attachments.length) return prompt;
-  const list = attachments.map((a, i) => `${i + 1}. ${a.dataUrl}`).join("\n");
+  const list = attachments
+    .map((a, i) => {
+      if (a.filePath) return `${i + 1}. ${a.filePath} (${a.mime})`;
+      return `${i + 1}. [inline ${a.mime}]`;
+    })
+    .join("\n");
   return `${prompt}\n\n附件圖片：\n${list}`;
 }
 
@@ -56,5 +61,8 @@ export function evaluateComposedPrompt(
   attachments: Attachment[]
 ): GuardrailDecision {
   const combined = composePrompt(prompt, attachments);
-  return evaluatePromptIgnoringLength(policy, combined);
+  // Skip semantic checks on composed prompt: the user text is already
+  // semantic-checked separately, and base64 attachment data can randomly
+  // contain action/target keywords causing false positives.
+  return evaluatePromptWithOptions(policy, combined, { ignoreLength: true, skipSemantic: true });
 }

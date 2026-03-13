@@ -10,6 +10,7 @@ export type TelegramMessage = {
   chat: TelegramChat;
   from?: TelegramUser;
   text?: string;
+  caption?: string;
   photo?: TelegramPhotoSize[];
   document?: TelegramDocument;
   reply_to_message?: TelegramMessage;

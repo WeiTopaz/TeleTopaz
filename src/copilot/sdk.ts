@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AiPermissionHandler } from "../provider/types.js";
+import type { AiAttachment, AiPermissionHandler } from "../provider/types.js";
 
 export type CopilotEvent = {
   type?: string;
@@ -367,11 +367,15 @@ export class CopilotSdkSession {
     }
   }
 
-  async send(prompt: string): Promise<void> {
+  async send(prompt: string, attachments?: AiAttachment[]): Promise<void> {
     if (!this.session.send) {
       throw new Error("Copilot session does not support send");
     }
-    await this.session.send({ prompt });
+    if (attachments?.length) {
+      await this.session.send({ prompt, attachments });
+    } else {
+      await this.session.send({ prompt });
+    }
   }
 
   async sendAndWait(prompt: string, timeoutMs?: number): Promise<unknown> {

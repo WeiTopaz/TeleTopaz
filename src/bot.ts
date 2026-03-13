@@ -7,7 +7,7 @@ import { TelegramApi } from "./telegram/api.js";
 import { InlineKeyboardMarkup, TelegramCallbackQuery, TelegramMessage, TelegramUpdate } from "./telegram/types.js";
 import { loadConfiguredRuntimeConfig, loadSecrets } from "./config/secrets.js";
 import { loadDirectoryPatterns, expandDirectoryPatterns, isAllowedDirectory } from "./config/directories.js";
-import { loadGuardrails, evaluatePrompt, evaluatePromptIgnoringLength, guardToolOutput } from "./guardrails/guardrails.js";
+import { loadGuardrails, evaluatePrompt, evaluatePromptWithOptions, guardToolOutput } from "./guardrails/guardrails.js";
 import { redact } from "./util/redaction.js";
 import { markdownToTelegram, splitLongMessage } from "./util/markdown.js";
 import { formatChatDisplayName, formatJsonResult, parseIndex } from "./util/format.js";
@@ -17,6 +17,7 @@ import { CopilotSdkClient, normalizeModelInfos } from "./copilot/sdk.js";
 import { GeminiSdkClient } from "./gemini/sdk.js";
 import { quotaService } from "./services/quota.js";
 import type {
+  AiAttachment,
   AiClient,
   AiEvent,
   AiPermissionHandler,
@@ -24,7 +25,7 @@ import type {
   AiPermissionResult,
   ProviderType
 } from "./provider/types.js";
-import { AgentContext, ToolTracking, PendingTask } from "./session/state.js";
+import { AgentContext, Attachment, ToolTracking, PendingTask } from "./session/state.js";
 import { getIconPool, pickIcon } from "./session/emoji.js";
 import { SessionMemoryStore } from "./session/memory-store.js";
 import { buildPersonaPrompt } from "./session/persona.js";
@@ -52,6 +53,15 @@ const MESSAGE_LIMIT = 4096;
 const PENDING_LIMIT = 15;
 const MAX_ATTACHMENTS = 8;
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
+const MIME_EXTENSIONS: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/bmp": "bmp",
+  "image/svg+xml": "svg",
+};
 const TOOL_PREVIEW_LEN = 150;
 const POLLING_ERROR_DEDUPE_WINDOW_MS = 15_000;
 const ROUTER_MODEL_PATTERN = /(?:^|[-.])(mini|flash|lite)(?:$|[-.])/i;
@@ -476,7 +486,8 @@ export class TeleTopazService {
   }
 
   private async handleMessage(message: TelegramMessage): Promise<void> {
-    if (!message.text && !message.photo && !message.document) return;
+    const hasText = Boolean(message.text || message.caption);
+    if (!hasText && !message.photo && !message.document) return;
     const chatId = message.chat.id;
     const userId = message.from?.id;
 
@@ -496,12 +507,14 @@ export class TeleTopazService {
 
     if (message.photo || message.document) {
       const handled = await this.handleImages(message, state);
-      if (!message.text || !message.text.trim()) {
+      const userText = message.text ?? message.caption;
+      if (!userText || !userText.trim()) {
         if (handled) return;
       }
     }
 
-    if (!message.text || !message.text.trim()) return;
+    const userText = (message.text ?? message.caption ?? "").trim();
+    if (!userText) return;
 
     const canBootstrapAutoSession = state.mode === "auto" && Boolean(state.workDir) && !state.session;
     if (!state.workDir || (!state.session && !canBootstrapAutoSession)) {
@@ -516,7 +529,7 @@ export class TeleTopazService {
 
     const policy = await this.guardrailsPromise;
     const promptLimit = policy.maxPromptLength ?? MESSAGE_LIMIT;
-    const decision = evaluatePrompt(policy, message.text);
+    const decision = evaluatePrompt(policy, userText);
     if (!decision.allowed) {
       await this.safeSend(
         chatId,
@@ -526,8 +539,10 @@ export class TeleTopazService {
       return;
     }
 
-    const prompt = composePrompt(message.text, state.attachments);
-    const combinedDecision = evaluatePromptIgnoringLength(policy, prompt);
+    const prompt = composePrompt(userText, state.attachments);
+    // Skip semantic checks on composed prompt: user text was already checked
+    // above, and base64 attachment data can cause false semantic_sensitive_request.
+    const combinedDecision = evaluatePromptWithOptions(policy, prompt, { ignoreLength: true, skipSemantic: true });
     if (!combinedDecision.allowed) {
       await this.safeSend(
         chatId,
@@ -560,7 +575,7 @@ export class TeleTopazService {
 
     // Auto mode: classify intent and switch provider/model accordingly
     if (state.mode === "auto" && state.routerModel && state.coreModel) {
-      const intent = await this.classifyIntent(chatId, message.text!, state.routerModel);
+      const intent = await this.classifyIntent(chatId, userText, state.routerModel);
       const targetModel = intent === "ROUTER" ? state.routerModel : state.coreModel;
       const targetProvider = this.resolveProviderForModel(targetModel);
       
@@ -602,7 +617,12 @@ export class TeleTopazService {
     }, 20000);
 
     logger.info("Prompt sending", { chatId });
-    const sendResult = await this.sendPrompt(state, prompt, message.message_id, promptLimit);
+    const aiAttachments = this.toAiAttachments(state.attachments);
+    const sendResult = await this.sendPrompt(state, prompt, message.message_id, promptLimit, aiAttachments);
+    // Clear consumed attachments so they don't pollute subsequent messages
+    if (state.attachments.length > 0) {
+      state.attachments = [];
+    }
     if (sendResult.chunked && sendResult.totalChunks > 1) {
       await this.safeSend(
         chatId,
@@ -669,7 +689,26 @@ export class TeleTopazService {
     }
 
     const dataUrl = `data:${mime};base64,${output.toString("base64")}`;
-    state.attachments.push({ dataUrl, mime, addedAt: Date.now() });
+
+    // Save attachment to disk so AI tools can access the file
+    let filePath: string | undefined;
+    if (state.workDir) {
+      try {
+        const attachDir = path.join(state.workDir, "attachments");
+        await fs.mkdir(attachDir, { recursive: true });
+        const ext = MIME_EXTENSIONS[mime] ?? mime.split("/")[1] ?? "bin";
+        const fileName = `photo_${Date.now()}_${state.attachments.length}.${ext}`;
+        filePath = path.join(attachDir, fileName);
+        await fs.writeFile(filePath, output);
+      } catch (err) {
+        logger.warn("Failed to save attachment to disk", err);
+        // Continue without filePath — the dataUrl fallback is still available
+      }
+    }
+
+    const attachment: import("./session/state.js").Attachment = { dataUrl, mime, addedAt: Date.now() };
+    if (filePath) attachment.filePath = filePath;
+    state.attachments.push(attachment);
     await this.safeSend(chatId, `已附加圖片 (${state.attachments.length}/${MAX_ATTACHMENTS})`, message.message_id);
     return true;
   }
@@ -691,18 +730,31 @@ export class TeleTopazService {
     return /length|token|上限|limit|max/i.test(message);
   }
 
+  private toAiAttachments(attachments: Attachment[]): AiAttachment[] {
+    return attachments
+      .filter((a) => a.filePath)
+      .map((a) => ({ type: a.mime, path: a.filePath!, displayName: path.basename(a.filePath!) }));
+  }
+
   private async trySendPromptInChunks(
     state: AgentContext,
     prompt: string,
-    promptLimit?: number
+    promptLimit?: number,
+    aiAttachments?: AiAttachment[]
   ): Promise<number> {
     const limit = promptLimit;
     if (!limit || prompt.length <= limit) return 0;
     const chunks = buildPromptChunks(prompt, limit);
     if (chunks.total <= 1) return 0;
     logger.info("AI send chunked", { chatId: state.chatId, total: chunks.total });
-    for (const chunk of chunks.chunks) {
-      await state.session?.send(chunk);
+    for (let i = 0; i < chunks.chunks.length; i++) {
+      const chunk = chunks.chunks[i]!;
+      // Pass attachments only with the first chunk
+      if (i === 0 && aiAttachments?.length) {
+        await state.session?.send(chunk, aiAttachments);
+      } else {
+        await state.session?.send(chunk);
+      }
     }
     return chunks.total;
   }
@@ -711,12 +763,13 @@ export class TeleTopazService {
     state: AgentContext,
     prompt: string,
     replyTo?: number,
-    promptLimit?: number
+    promptLimit?: number,
+    aiAttachments?: AiAttachment[]
   ): Promise<{ chunked: boolean; totalChunks: number }> {
     if (!state.session) return { chunked: false, totalChunks: 0 };
     try {
       logger.info("AI send", { chatId: state.chatId });
-      await state.session.send(prompt);
+      await state.session.send(prompt, aiAttachments);
       logger.info("AI send ok", { chatId: state.chatId });
       return { chunked: false, totalChunks: 1 };
     } catch (err) {
@@ -724,7 +777,7 @@ export class TeleTopazService {
       const limit = this.extractPromptLengthLimit(err) ?? promptLimit;
       if (isLength && limit) {
         try {
-          const total = await this.trySendPromptInChunks(state, prompt, limit);
+          const total = await this.trySendPromptInChunks(state, prompt, limit, aiAttachments);
           if (total > 0) {
             return { chunked: true, totalChunks: total };
           }
@@ -1261,13 +1314,13 @@ export class TeleTopazService {
 
     lines.push(
       "",
-      "📌 指令：",
-      "/project — 選擇工作區",
-      "/model — 切換 AI 模型 (Auto/Manual)",
-      "/info — 說明",
-      "/clear — 清除對話與附件",
-      "/allowall — 切換全部允許/操作確認模式",
-      "/quit — 關閉Bot",
+      "📌 指令：","",
+      "/project — 選擇工作區","",
+      "/model — 切換 AI 模型 (Auto/Manual)","",
+      "/info — 說明","",
+      "/clear — 清除對話與附件","",
+      "/allowall — 切換全部允許/操作確認模式","",
+      "/quit — 關閉Bot","",
       "/help — 顯示說明與指令列表"
     );
 
@@ -2148,12 +2201,12 @@ export class TeleTopazService {
       `🔐 操作確認：${state.allowAll ? "全部允許" : "逐次確認"}`,
       "",
       "📌 指令：",
-      "/project — 選擇工作區",
-      "/model — 切換 AI 模型 (Auto/Manual)",
-      "/info — 說明",
-      "/clear — 清除對話與附件",
-      "/allowall — 切換全部允許/操作確認模式",
-      "/quit — 關閉Bot",
+      "/project — 選擇工作區","",
+      "/model — 切換 AI 模型 (Auto/Manual)","",
+      "/info — 說明","",
+      "/clear — 清除對話與附件","",
+      "/allowall — 切換全部允許/操作確認模式","",
+      "/quit — 關閉Bot","",
       "/help — 顯示說明與指令列表"
     ].join("\n");
   }

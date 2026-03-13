@@ -107,9 +107,15 @@ export interface AiClient {
   queryProviderInfo(): Promise<AiProviderInfo>;
 }
 
+export type AiAttachment = {
+  type: string;
+  path: string;
+  displayName?: string;
+};
+
 export interface AiSession {
   onEvent(handler: (event: AiEvent) => void): void;
-  send(prompt: string): Promise<void>;
+  send(prompt: string, attachments?: AiAttachment[]): Promise<void>;
   sendAndWait(prompt: string, timeoutMs?: number): Promise<unknown>;
   destroy(): Promise<void>;
   abort(): Promise<void>;

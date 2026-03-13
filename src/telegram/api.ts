@@ -12,6 +12,8 @@ import {
 } from "./types.js";
 
 const TELEGRAM_HOST = "api.telegram.org";
+const REQUEST_TIMEOUT_MS = 30_000;
+const DOWNLOAD_TIMEOUT_MS = 60_000;
 
 export type TelegramApiOptions = {
   token: string;
@@ -29,9 +31,10 @@ export class TelegramApi {
     });
   }
 
-  private async call<T>(method: string, payload: Record<string, unknown>): Promise<T> {
+  private async call<T>(method: string, payload: Record<string, unknown>, timeoutMs?: number): Promise<T> {
     const url = new URL(`https://${TELEGRAM_HOST}/bot${this.token}/${method}`);
     const body = JSON.stringify(payload);
+    const timeout = timeoutMs ?? REQUEST_TIMEOUT_MS;
 
     const response = await new Promise<TelegramApiResponse<T>>((resolve, reject) => {
       const req = https.request(
@@ -39,6 +42,7 @@ export class TelegramApi {
         {
           method: "POST",
           agent: this.agent,
+          timeout,
           headers: {
             "content-type": "application/json",
             "content-length": Buffer.byteLength(body)
@@ -58,6 +62,9 @@ export class TelegramApi {
           });
         }
       );
+      req.on("timeout", () => {
+        req.destroy(new Error(`Telegram API timeout: ${method} (${timeout}ms)`));
+      });
       req.on("error", reject);
       req.write(body);
       req.end();
@@ -81,6 +88,7 @@ export class TelegramApi {
         {
           method: "POST",
           agent: this.agent,
+          timeout: REQUEST_TIMEOUT_MS,
           headers: {
             "content-type": "application/json",
             "content-length": Buffer.byteLength(body)
@@ -100,6 +108,9 @@ export class TelegramApi {
           });
         }
       );
+      req.on("timeout", () => {
+        req.destroy(new Error(`Telegram API timeout: ${method} (${REQUEST_TIMEOUT_MS}ms)`));
+      });
       req.on("error", reject);
       req.write(body);
       req.end();
@@ -112,11 +123,12 @@ export class TelegramApi {
   }
 
   async getUpdates(offset: number | undefined, timeout: number, limit?: number): Promise<TelegramUpdate[]> {
+    // getUpdates uses Telegram long-polling; allow extra time beyond the server-side timeout
     return this.call<TelegramUpdate[]>("getUpdates", {
       offset,
       timeout,
       limit
-    });
+    }, (timeout + 10) * 1000);
   }
 
   async sendMessage(options: {
@@ -180,7 +192,7 @@ export class TelegramApi {
     return new Promise<Buffer>((resolve, reject) => {
       const req = https.request(
         url,
-        { method: "GET", agent: this.agent },
+        { method: "GET", agent: this.agent, timeout: DOWNLOAD_TIMEOUT_MS },
         (res) => {
           if (res.statusCode && res.statusCode >= 400) {
             reject(new Error(`Telegram file download failed: ${res.statusCode}`));
@@ -200,6 +212,9 @@ export class TelegramApi {
           res.on("end", () => resolve(Buffer.concat(chunks)));
         }
       );
+      req.on("timeout", () => {
+        req.destroy(new Error(`Telegram file download timeout (${DOWNLOAD_TIMEOUT_MS}ms)`));
+      });
       req.on("error", reject);
       req.end();
     });

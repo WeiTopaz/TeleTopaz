@@ -8,6 +8,7 @@ export type PendingTask = {
 export type Attachment = {
   dataUrl: string;
   mime: string;
+  filePath?: string;
   addedAt: number;
 };
 
