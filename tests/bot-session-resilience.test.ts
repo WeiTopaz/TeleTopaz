@@ -55,6 +55,7 @@ function createCallback(data: string): TelegramCallbackQuery {
 
 describe("TeleTopazService session resilience", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -157,6 +158,10 @@ describe("TeleTopazService session resilience", () => {
   });
 
   it("proactively rebuilds stale sessions without talking to the LLM", async () => {
+    // Pin time to active hours (UTC+8 12:00 = UTC 04:00)
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-14T04:00:00Z"));
+
     const api = createApi();
     const service = new TeleTopazService(api, "1", "1", 0);
     const state = (service as unknown as {
@@ -208,5 +213,52 @@ describe("TeleTopazService session resilience", () => {
 
     expect(noticeCall?.text).toContain("重建工作階段");
     expect(noticeCall?.reply_markup).toBeUndefined();
+  });
+
+  it("suppresses proactive rebuild notification during quiet hours (00:00–07:59 UTC+8)", async () => {
+    // Pin time to quiet hours (UTC+8 03:00 = UTC 19:00)
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-14T19:00:00Z"));
+
+    const api = createApi();
+    const service = new TeleTopazService(api, "1", "1", 0);
+    const state = (service as unknown as {
+      getOrCreateState: (chatId: number) => Record<string, unknown>;
+    }).getOrCreateState(1);
+
+    const staleSession = createSession();
+    const replacementSession = createSession();
+
+    state.workDir = "/tmp/project";
+    state.provider = "copilot";
+    state.model = "gpt-5-mini";
+    state.session = staleSession;
+    state.processing = false;
+    state.resetting = false;
+    state.sessionCreatedAt = Date.now() - 61 * 60 * 1000;
+    state.sessionLastActivityAt = Date.now() - 61 * 60 * 1000;
+
+    const mockCreateSession = vi.fn().mockImplementation(async () => {
+      state.session = replacementSession;
+      state.sessionCreatedAt = Date.now();
+      state.sessionLastActivityAt = Date.now();
+    });
+    (service as unknown as {
+      createSession: (chatId: number, cwd: string, model?: string) => Promise<void>;
+    }).createSession = mockCreateSession;
+
+    await (service as unknown as {
+      checkSessionHealth: () => Promise<void>;
+    }).checkSessionHealth();
+
+    // Session was rebuilt
+    expect(mockCreateSession).toHaveBeenCalled();
+
+    // But no notification was sent
+    const noticeCall = vi.mocked(api.sendMessage).mock.calls
+      .map((call) => call[0])
+      .find((payload) => typeof payload.text === "string" && payload.text.includes("重建工作階段"));
+
+    expect(noticeCall).toBeUndefined();
   });
 });

@@ -75,6 +75,12 @@ const TOOL_PREVIEW_LEN = 150;
 const POLLING_ERROR_DEDUPE_WINDOW_MS = 15_000;
 const SESSION_IDLE_REBUILD_MS = 60 * 60 * 1000;
 const SESSION_MAX_LIFETIME_MS = 10 * 60 * 60 * 1000;
+/** Returns true when proactive-rebuild notifications should be suppressed (00:00–07:59 UTC+8). */
+function isQuietHours(nowMs: number = Date.now()): boolean {
+  const utc8Hour = (new Date(nowMs).getUTCHours() + 8) % 24;
+  return utc8Hour < 8;
+}
+
 const ROUTER_MODEL_PATTERN = /(?:^|[-.])(mini|flash|lite)(?:$|[-.])/i;
 
 type CreateSessionOptions = {
@@ -820,7 +826,12 @@ export class TeleTopazService {
       if (!state.session) {
         continue;
       }
-      await this.safeSend(chatId, `♻️ ${reason}，已自動重建工作階段。下一則訊息可直接繼續。`);
+
+      if (!isQuietHours(now)) {
+        await this.safeSend(chatId, `♻️ ${reason}，已自動重建工作階段。下一則訊息可直接繼續。`);
+      } else {
+        logger.info("Proactive rebuild notification suppressed (quiet hours)", { chatId });
+      }
     }
   }
 
