@@ -36,6 +36,13 @@ describe("sandbox profile", () => {
     expect(profile).toContain("(allow file-read* (subpath \"/dev/pts\"))");
   });
 
+  it("allows /dev/null for subprocesses that rely on it", () => {
+    const profile = buildSandboxProfile({ workDir: "/tmp/test-project" });
+
+    expect(profile).toContain("(allow file-read* (subpath \"/dev/null\"))");
+    expect(profile).toContain("(allow file-write* (subpath \"/dev/null\"))");
+  });
+
   it("allows each TELETOPAZ_DIRECTORY_PATTERNS root without broadening to a shared ancestor", () => {
     const profile = buildSandboxProfile({
       directoryPatterns: ["/Users/test/Project/*", "/Users/test/Workspaces/*"]
