@@ -8,6 +8,7 @@
     "dev": "node --env-file=.env --enable-source-maps dist/index.js",
     "prestart": "npm run build",
     "start": "node dist/index.js",
+    "start:hot": "node scripts/launcher.js",
     "setup:secrets": "tsx scripts/setup-secrets.ts",
     "test": "vitest run",
     "test:watch": "vitest"

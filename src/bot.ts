@@ -39,6 +39,15 @@ import {
   isTransientTelegramNetworkError
 } from "./util/errors.js";
 import {
+  EXIT_CODE_RESTART,
+  type RestartState,
+  clearRestartState,
+  getGitInfo,
+  loadRestartState,
+  performGitRollback,
+  saveRestartState,
+} from "./restart.js";
+import {
   DEFAULT_CORE_MODEL,
   DEFAULT_ROUTER_MODEL,
   formatModelEntry as formatConfiguredModelEntry,
@@ -231,6 +240,7 @@ const COMMANDS = [
   "/i",
   "/clear",
   "/allowall",
+  "/restart",
   "/quit"
 ];
 
@@ -253,6 +263,8 @@ export class TeleTopazService {
   private running = true;
   private offset = 0;
   private shuttingDown = false;
+  private restartConfirmTimer: NodeJS.Timeout | undefined;
+  private restartConfirmMessageId: number | undefined;
 
   constructor(api: TelegramApi, ownerChatId: string, ownerUserId: string, startTimestamp: number) {
     this.api = api;
@@ -304,6 +316,7 @@ export class TeleTopazService {
     logger.info("  /model - 切換模型 (Auto/Manual)");
     logger.info("  /info - 說明");
     logger.info("  /clear - 清除對話與附件");
+    logger.info("  /restart - 熱啟動 (需搭配 start:hot)");
     logger.info("  /quit - 關閉Bot");
     logger.info("  /help - 顯示說明與指令列表");
 
@@ -337,6 +350,9 @@ export class TeleTopazService {
     process.on("uncaughtException", (err) => {
       logger.error("Uncaught exception", err);
     });
+
+    // Hot-restart confirmation check
+    await this.checkRestartConfirmation();
   }
 
   private async poll(): Promise<void> {
@@ -833,6 +849,10 @@ export class TeleTopazService {
       case "/allowall":
         await this.handleAllowAllToggle(chatId);
         return;
+      case "/restart":
+        if (message.date < this.startTimestamp) return;
+        await this.handleRestart(chatId);
+        return;
       case "/quit":
         if (message.date < this.startTimestamp) return;
         await this.shutdown();
@@ -859,6 +879,22 @@ export class TeleTopazService {
 
     await this.api.answerCallbackQuery(callback.id);
     const data = callback.data ?? "";
+
+    if (data === "restart.confirm") {
+      if (this.restartConfirmTimer) clearTimeout(this.restartConfirmTimer);
+      this.restartConfirmTimer = undefined;
+      clearRestartState();
+      if (message) {
+        await this.editMessageSafe(chatId, message.message_id, "✅ 服務確認正常，熱啟動完成。");
+      }
+      return;
+    }
+    if (data === "restart.deny") {
+      if (this.restartConfirmTimer) clearTimeout(this.restartConfirmTimer);
+      this.restartConfirmTimer = undefined;
+      await this.handleRestartRollback(chatId);
+      return;
+    }
 
     if (data === "do.project") {
       await this.sendDirectoryList(chatId);
@@ -1320,6 +1356,7 @@ export class TeleTopazService {
       "/info — 說明","",
       "/clear — 清除對話與附件","",
       "/allowall — 切換全部允許/操作確認模式","",
+      "/restart — 熱啟動","",
       "/quit — 關閉Bot","",
       "/help — 顯示說明與指令列表"
     );
@@ -2206,6 +2243,7 @@ export class TeleTopazService {
       "/info — 說明","",
       "/clear — 清除對話與附件","",
       "/allowall — 切換全部允許/操作確認模式","",
+      "/restart — 熱啟動","",
       "/quit — 關閉Bot","",
       "/help — 顯示說明與指令列表"
     ].join("\n");
@@ -2276,6 +2314,157 @@ export class TeleTopazService {
       return "Mistral";
     }
     return "Other";
+  }
+
+  // ── Hot Restart ──────────────────────────────────────────
+
+  private async handleRestart(chatId: number): Promise<void> {
+    if (this.restartConfirmTimer) {
+      clearTimeout(this.restartConfirmTimer);
+      this.restartConfirmTimer = undefined;
+    }
+
+    await this.safeSend(chatId, "🔄 正在準備熱啟動...");
+
+    let gitInfo: { sha: string; hasUncommittedChanges: boolean };
+    try {
+      gitInfo = getGitInfo(process.cwd());
+    } catch (err) {
+      await this.safeSend(chatId, `❌ 無法取得 git 資訊：${String(err)}`);
+      return;
+    }
+
+    const state: RestartState = {
+      triggeredBy: "user",
+      triggeredAt: Date.now(),
+      previousGitSha: gitInfo.sha,
+      hadUncommittedChanges: gitInfo.hasUncommittedChanges,
+      rollbackCount: 0,
+    };
+    saveRestartState(state);
+
+    await this.safeSend(chatId, "🔄 熱啟動中，服務將在數秒內重新上線...");
+    await this.shutdownForRestart();
+  }
+
+  private async checkRestartConfirmation(): Promise<void> {
+    const state = loadRestartState();
+    if (!state) return;
+
+    const chatId = Number(this.ownerChatId);
+    const rollbackLabel = state.rollbackCount > 0 ? "（退版後重啟）" : "";
+    const keyboard: InlineKeyboardMarkup = {
+      inline_keyboard: [
+        [
+          { text: "✅ 服務正常", callback_data: "restart.confirm" },
+          { text: "🔙 退版重啟", callback_data: "restart.deny" },
+        ],
+      ],
+    };
+
+    const msg = await this.safeSend(
+      chatId,
+      `🔄 熱啟動完成${rollbackLabel}！請確認服務是否正常運作。\n（5 分鐘內未確認將自動退版重啟）`,
+      undefined,
+      keyboard
+    );
+    if (msg) this.restartConfirmMessageId = msg.message_id;
+
+    this.restartConfirmTimer = setTimeout(() => {
+      this.handleRestartTimeout(chatId).catch((err) =>
+        logger.error("Restart timeout handler error", err)
+      );
+    }, 5 * 60 * 1000);
+  }
+
+  private async handleRestartTimeout(chatId: number): Promise<void> {
+    this.restartConfirmTimer = undefined;
+    const state = loadRestartState();
+    if (!state) return;
+
+    if (state.triggeredBy === "system") {
+      await this.safeSend(chatId, "⛔ 退版後仍未收到確認，服務即將中斷。");
+      if (this.restartConfirmMessageId) {
+        await this.editMessageSafe(chatId, this.restartConfirmMessageId, "⛔ 已逾時，服務中斷。");
+      }
+      clearRestartState();
+      await this.withTimeout(logger.flush(), 4000).catch(() => {});
+      process.exit(1);
+      return;
+    }
+
+    if (state.triggeredBy === "user" && state.rollbackCount < 1) {
+      await this.handleRestartRollback(chatId);
+      return;
+    }
+
+    clearRestartState();
+    await this.withTimeout(logger.flush(), 4000).catch(() => {});
+    process.exit(1);
+  }
+
+  private async handleRestartRollback(chatId: number): Promise<void> {
+    const state = loadRestartState();
+    if (!state) {
+      await this.safeSend(chatId, "❌ 找不到重啟狀態，無法退版。");
+      return;
+    }
+
+    await this.safeSend(chatId, "🔙 正在退版並重新啟動...");
+
+    try {
+      performGitRollback(process.cwd(), state);
+    } catch (err) {
+      await this.safeSend(chatId, `❌ Git 退版失敗：${String(err)}\n服務即將中斷。`);
+      clearRestartState();
+      await this.withTimeout(logger.flush(), 4000).catch(() => {});
+      process.exit(1);
+      return;
+    }
+
+    const updatedState: RestartState = {
+      ...state,
+      triggeredBy: "system",
+      rollbackCount: state.rollbackCount + 1,
+    };
+    saveRestartState(updatedState);
+
+    await this.shutdownForRestart();
+  }
+
+  private async shutdownForRestart(): Promise<void> {
+    if (this.restartConfirmTimer) {
+      clearTimeout(this.restartConfirmTimer);
+      this.restartConfirmTimer = undefined;
+    }
+    this.shuttingDown = true;
+    this.running = false;
+    const tasks: Promise<void>[] = [];
+
+    if (this.intentClassifierClient) {
+      tasks.push(this.resetIntentClassifierClient());
+    }
+
+    for (const s of this.states.values()) {
+      if (s.session) {
+        tasks.push(
+          this.withTimeout(s.session.destroy(), 6000).catch((err) => {
+            if (!isConnectionDisposedError(err)) logger.warn("Destroy session failed", err);
+          })
+        );
+      }
+      if (s.client) {
+        tasks.push(
+          this.withTimeout(s.client.stop(), 4000).catch((err) => {
+            if (!isConnectionDisposedError(err)) logger.warn("Stop client failed", err);
+          })
+        );
+      }
+    }
+
+    await this.withTimeout(Promise.all(tasks).then(() => undefined), 12000).catch((err) => logger.error(err));
+    await this.withTimeout(logger.flush(), 4000).catch((err) => logger.error("Log flush failed", err));
+    process.exit(EXIT_CODE_RESTART);
   }
 
   async shutdown(): Promise<void> {
