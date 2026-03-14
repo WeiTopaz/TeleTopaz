@@ -1,4 +1,4 @@
-import type { AiClient, AiSession, AiEvent, ProviderType } from "../provider/types.js";
+import type { AiAttachment, AiClient, AiSession, AiEvent, ProviderType } from "../provider/types.js";
 
 export type PendingTask = {
   prompt: string;
@@ -18,6 +18,14 @@ export type ToolTracking = {
   paramsKey: string;
   toolName?: string;
   callId?: string;
+};
+
+export type PendingRecovery = {
+  id: string;
+  prompt: string;
+  replyToMessageId?: number;
+  aiAttachments?: AiAttachment[];
+  createdAt: number;
 };
 
 export type AgentContext = {
@@ -48,6 +56,9 @@ export type AgentContext = {
   lastAssistantMessageHash: string | undefined;
   lastAssistantMessageText: string | undefined;
   promptCycles: number;
+  sessionCreatedAt: number | undefined;
+  sessionLastActivityAt: number | undefined;
+  pendingRecovery: PendingRecovery | undefined;
   starredModels: string[];
   cachedDirs: string[];
   personaLoaded: boolean;

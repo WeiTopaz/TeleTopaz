@@ -73,7 +73,19 @@ const MIME_EXTENSIONS: Record<string, string> = {
 };
 const TOOL_PREVIEW_LEN = 150;
 const POLLING_ERROR_DEDUPE_WINDOW_MS = 15_000;
+const SESSION_IDLE_REBUILD_MS = 60 * 60 * 1000;
+const SESSION_MAX_LIFETIME_MS = 10 * 60 * 60 * 1000;
 const ROUTER_MODEL_PATTERN = /(?:^|[-.])(mini|flash|lite)(?:$|[-.])/i;
+
+type CreateSessionOptions = {
+  announce?: boolean;
+};
+
+type SendPromptResult = {
+  chunked: boolean;
+  totalChunks: number;
+  recovered?: boolean;
+};
 
 /** Tool names that perform write or delete operations requiring human confirmation. */
 const WRITE_DELETE_TOOLS = new Set([
@@ -359,6 +371,9 @@ export class TeleTopazService {
     while (this.running) {
       try {
         const updates = await this.api.getUpdates(this.offset, 25);
+        await this.checkSessionHealth().catch((err) => {
+          logger.warn("Session health check failed", err);
+        });
         if (updates.length === 0) {
           continue;
         }
@@ -520,6 +535,7 @@ export class TeleTopazService {
     }
 
     const state = this.getOrCreateState(chatId);
+    state.pendingRecovery = undefined;
 
     if (message.photo || message.document) {
       const handled = await this.handleImages(message, state);
@@ -579,16 +595,6 @@ export class TeleTopazService {
       return;
     }
 
-    state.processing = true;
-    state.activePrompt = prompt;
-    state.replyToMessageId = message.message_id;
-    state.promptCycles += 1;
-    state.awaitingReply = true;
-    state.completionPending = false;
-    state.receivedAssistantMessage = false;
-    state.lastAssistantMessageHash = undefined;
-    state.lastAssistantMessageText = undefined;
-
     // Auto mode: classify intent and switch provider/model accordingly
     if (state.mode === "auto" && state.routerModel && state.coreModel) {
       const intent = await this.classifyIntent(chatId, userText, state.routerModel);
@@ -607,15 +613,48 @@ export class TeleTopazService {
       }
     }
 
-    await quotaService.increment(String(chatId), state.provider, state.model ?? "unknown");
+    const aiAttachments = this.toAiAttachments(state.attachments);
+    const sendResult = await this.sendPreparedPrompt(state, prompt, message.message_id, promptLimit, aiAttachments);
+    // Clear consumed attachments so they don't pollute subsequent messages
+    if (state.attachments.length > 0) {
+      state.attachments = [];
+    }
+    } catch (err) {
+      logger.error("handleMessage error", err);
+      await this.safeSend(chatId, "處理訊息時發生錯誤，請稍後再試。", message.message_id);
+    }
+  }
 
-    const processing = await this.safeSend(
-      chatId,
-      `⏳處理中：${prompt.slice(0, 80)}`,
-      message.message_id
-    );
-    state.processingMessageId = processing?.message_id;
-    if (state.processingTimer) clearTimeout(state.processingTimer);
+  private touchSession(state: AgentContext): void {
+    if (!state.session) return;
+    const now = Date.now();
+    if (state.sessionCreatedAt === undefined) {
+      state.sessionCreatedAt = now;
+    }
+    state.sessionLastActivityAt = now;
+  }
+
+  private clearProcessingTimer(state: AgentContext): void {
+    if (!state.processingTimer) return;
+    clearTimeout(state.processingTimer);
+    state.processingTimer = undefined;
+  }
+
+  private preparePromptDispatch(state: AgentContext, prompt: string, replyTo?: number): void {
+    state.processing = true;
+    state.activePrompt = prompt;
+    state.replyToMessageId = replyTo;
+    state.promptCycles += 1;
+    state.awaitingReply = true;
+    state.completionPending = false;
+    state.receivedAssistantMessage = false;
+    state.lastAssistantMessageHash = undefined;
+    state.lastAssistantMessageText = undefined;
+    this.touchSession(state);
+  }
+
+  private scheduleProcessingTimer(state: AgentContext): void {
+    this.clearProcessingTimer(state);
     state.processingTimer = setTimeout(() => {
       if (state.processingMessageId) {
         const modelEntry = state.model
@@ -623,32 +662,165 @@ export class TeleTopazService {
           : this.formatResolvedModelEntry(state.coreModel ?? state.routerModel);
         this.api
           .editMessageText({
-            chat_id: chatId,
+            chat_id: state.chatId,
             message_id: state.processingMessageId,
-            text: this.prepareOutgoingText(chatId, `⏳處理中…仍在等待 ${modelEntry} 回覆`),
+            text: this.prepareOutgoingText(state.chatId, `⏳處理中…仍在等待 ${modelEntry} 回覆`),
             parse_mode: "MarkdownV2"
           })
           .catch((err) => logger.warn("Update processing message failed", err));
       }
-    }, 20000);
+    }, 20_000);
+  }
 
-    logger.info("Prompt sending", { chatId });
-    const aiAttachments = this.toAiAttachments(state.attachments);
-    const sendResult = await this.sendPrompt(state, prompt, message.message_id, promptLimit, aiAttachments);
-    // Clear consumed attachments so they don't pollute subsequent messages
-    if (state.attachments.length > 0) {
-      state.attachments = [];
-    }
+  private buildRecoveryKeyboard(recoveryId: string): InlineKeyboardMarkup {
+    return {
+      inline_keyboard: [[
+        { text: "✅ 仍要發送", callback_data: `recovery.resend:${recoveryId}` },
+        { text: "❌ 取消", callback_data: `recovery.cancel:${recoveryId}` }
+      ]]
+    };
+  }
+
+  private async sendPreparedPrompt(
+    state: AgentContext,
+    prompt: string,
+    replyTo: number | undefined,
+    promptLimit?: number,
+    aiAttachments?: AiAttachment[]
+  ): Promise<SendPromptResult> {
+    this.preparePromptDispatch(state, prompt, replyTo);
+    await quotaService.increment(String(state.chatId), state.provider, state.model ?? "unknown");
+
+    const processing = await this.safeSend(
+      state.chatId,
+      `⏳處理中：${prompt.slice(0, 80)}`,
+      replyTo
+    );
+    state.processingMessageId = processing?.message_id;
+    this.scheduleProcessingTimer(state);
+
+    logger.info("Prompt sending", { chatId: state.chatId });
+    const sendResult = await this.sendPrompt(state, prompt, replyTo, promptLimit, aiAttachments);
     if (sendResult.chunked && sendResult.totalChunks > 1) {
       await this.safeSend(
-        chatId,
+        state.chatId,
         `提示詞過長，已拆分為 ${sendResult.totalChunks} 段送出以維持完整內容。`,
-        message.message_id
+        replyTo
       );
     }
+    return sendResult;
+  }
+
+  private async handleDisconnectedSession(
+    state: AgentContext,
+    prompt: string,
+    replyTo: number | undefined,
+    aiAttachments?: AiAttachment[]
+  ): Promise<boolean> {
+    if (!state.workDir || !state.model) {
+      return false;
+    }
+
+    const queuedTasks = [...state.pendingTasks];
+
+    try {
+      await this.createSession(state.chatId, state.workDir, state.model, { announce: false });
     } catch (err) {
-      logger.error("handleMessage error", err);
-      await this.safeSend(chatId, "處理訊息時發生錯誤，請稍後再試。", message.message_id);
+      logger.warn("Session rebuild failed after disconnect", err);
+      return false;
+    }
+    if (!state.session) {
+      return false;
+    }
+
+    state.pendingTasks = queuedTasks;
+    const recovery = {
+      id: crypto.randomUUID(),
+      prompt,
+      createdAt: Date.now(),
+      ...(replyTo !== undefined ? { replyToMessageId: replyTo } : {}),
+      ...(aiAttachments !== undefined ? { aiAttachments } : {})
+    };
+    state.pendingRecovery = recovery;
+    state.processing = false;
+    state.activePrompt = undefined;
+    state.awaitingReply = false;
+    state.completionPending = false;
+    state.receivedAssistantMessage = false;
+    state.lastAssistantMessageHash = undefined;
+    state.lastAssistantMessageText = undefined;
+    this.clearProcessingTimer(state);
+
+    if (state.processingMessageId) {
+      await this.editMessageSafe(state.chatId, state.processingMessageId, "♻️ 偵測到工作階段已中斷，正在改用新工作階段。");
+      state.processingMessageId = undefined;
+    }
+
+    await this.safeSend(
+      state.chatId,
+      "♻️ 偵測到工作階段已中斷，已重建工作階段。\n\n是否仍要發送原訊息？",
+      replyTo,
+      this.buildRecoveryKeyboard(recovery.id)
+    );
+    return true;
+  }
+
+  private async handleRecoveryAction(
+    chatId: number,
+    recoveryId: string,
+    shouldResend: boolean,
+    replyTo?: number
+  ): Promise<void> {
+    const state = this.getOrCreateState(chatId);
+    const pending = state.pendingRecovery;
+    if (!pending || pending.id !== recoveryId) {
+      await this.safeSend(chatId, "這個重送請求已過期。", replyTo);
+      return;
+    }
+
+    state.pendingRecovery = undefined;
+
+    if (!shouldResend) {
+      await this.safeSend(chatId, "已取消重送原訊息。", replyTo);
+      return;
+    }
+
+    const policy = await this.guardrailsPromise;
+    const promptLimit = policy.maxPromptLength ?? MESSAGE_LIMIT;
+    await this.sendPreparedPrompt(
+      state,
+      pending.prompt,
+      pending.replyToMessageId,
+      promptLimit,
+      pending.aiAttachments
+    );
+  }
+
+  private async checkSessionHealth(): Promise<void> {
+    const now = Date.now();
+
+    for (const [chatId, state] of this.states) {
+      if (!state.session || !state.workDir || !state.model) continue;
+      if (state.processing || state.resetting || state.pendingRecovery) continue;
+
+      const createdAt = state.sessionCreatedAt ?? now;
+      const lastActivityAt = state.sessionLastActivityAt ?? createdAt;
+      const lifetimeExceeded = now - createdAt >= SESSION_MAX_LIFETIME_MS;
+      const idleExceeded = now - lastActivityAt >= SESSION_IDLE_REBUILD_MS;
+
+      if (!lifetimeExceeded && !idleExceeded) continue;
+
+      const reason = lifetimeExceeded ? "工作階段已達使用上限" : "工作階段閒置過久";
+      logger.info("Proactive session rebuild", {
+        chatId,
+        reason: lifetimeExceeded ? "lifetime" : "idle"
+      });
+
+      await this.createSession(chatId, state.workDir, state.model, { announce: false });
+      if (!state.session) {
+        continue;
+      }
+      await this.safeSend(chatId, `♻️ ${reason}，已自動重建工作階段。下一則訊息可直接繼續。`);
     }
   }
 
@@ -781,7 +953,7 @@ export class TeleTopazService {
     replyTo?: number,
     promptLimit?: number,
     aiAttachments?: AiAttachment[]
-  ): Promise<{ chunked: boolean; totalChunks: number }> {
+  ): Promise<SendPromptResult> {
     if (!state.session) return { chunked: false, totalChunks: 0 };
     try {
       logger.info("AI send", { chatId: state.chatId });
@@ -802,7 +974,17 @@ export class TeleTopazService {
         }
       }
 
+      if (isConnectionDisposedError(err)) {
+        const recovered = await this.handleDisconnectedSession(state, prompt, replyTo, aiAttachments);
+        if (recovered) {
+          return { chunked: false, totalChunks: 0, recovered: true };
+        }
+      }
+
       state.processing = false;
+      state.awaitingReply = false;
+      state.activePrompt = undefined;
+      this.clearProcessingTimer(state);
       if (state.processingMessageId) {
         await this.api.editMessageText({
           chat_id: state.chatId,
@@ -936,6 +1118,14 @@ export class TeleTopazService {
     if (data.startsWith("peek.res:")) {
       const key = data.slice(9);
       await this.showStoredText(chatId, key, "結果", message?.message_id, true);
+      return;
+    }
+    if (data.startsWith("recovery.resend:")) {
+      await this.handleRecoveryAction(chatId, data.slice(16), true, message?.message_id);
+      return;
+    }
+    if (data.startsWith("recovery.cancel:")) {
+      await this.handleRecoveryAction(chatId, data.slice(16), false, message?.message_id);
       return;
     }
     if (data.startsWith("tool.confirm:")) {
@@ -1406,7 +1596,12 @@ export class TeleTopazService {
     return undefined;
   }
 
-  private async createSession(chatId: number, cwd: string, model?: string): Promise<void> {
+  private async createSession(
+    chatId: number,
+    cwd: string,
+    model?: string,
+    options: CreateSessionOptions = {}
+  ): Promise<void> {
     const active = this.findActiveSessionState();
     if (active && active.chatId !== chatId) {
       await this.safeSend(chatId, "已有其他聊天的工作階段正在使用中，請先關閉或重設。", undefined);
@@ -1439,6 +1634,8 @@ export class TeleTopazService {
         }
       }
     }
+    state.session = undefined;
+    state.client = undefined;
 
     const client = this.createProviderClient(state.provider);
     try {
@@ -1533,16 +1730,18 @@ export class TeleTopazService {
       state.dispatchingEvents = false;
       state.toolMessageMap.clear();
       state.lastAssistantMessageText = undefined;
+      state.sessionCreatedAt = Date.now();
+      state.sessionLastActivityAt = state.sessionCreatedAt;
+      state.pendingRecovery = undefined;
       state.personaLoaded = true;
-      if (state.processingTimer) {
-        clearTimeout(state.processingTimer);
-        state.processingTimer = undefined;
-      }
+      this.clearProcessingTimer(state);
 
       const projectLabel = path.basename(canonicalCwd);
       const modelLabel = this.formatStateModelLabel(state, useModel);
-      await this.safeSend(chatId, `💎TeleTopaz in ${projectLabel} / 系統訊息\n\n📂 ${projectLabel}\n⚙️ ${modelLabel}\n🔌 已連線`, undefined, this.buildNavKeyboard());
-      await this.sendStatusFooter(chatId);
+      if (options.announce !== false) {
+        await this.safeSend(chatId, `💎TeleTopaz in ${projectLabel} / 系統訊息\n\n📂 ${projectLabel}\n⚙️ ${modelLabel}\n🔌 已連線`, undefined, this.buildNavKeyboard());
+        await this.sendStatusFooter(chatId);
+      }
     } catch (err) {
       await client.stop().catch((stopErr) => {
         if (!isConnectionDisposedError(stopErr)) logger.warn("Stop client failed", stopErr);
@@ -1576,6 +1775,9 @@ export class TeleTopazService {
     const state = this.getOrCreateState(chatId);
     const type = event.type ?? (event as { event?: string }).event;
     const data = event.data ?? event;
+    if (type && state.session) {
+      this.touchSession(state);
+    }
 
     switch (type) {
       case "assistant.message": {
@@ -1599,10 +1801,7 @@ export class TeleTopazService {
           state.awaitingReply = false;
           state.receivedAssistantMessage = true;
           state.lastAssistantMessageText = content;
-          if (state.processingTimer) {
-            clearTimeout(state.processingTimer);
-            state.processingTimer = undefined;
-          }
+          this.clearProcessingTimer(state);
           if (state.completionPending && state.pendingTasks.length === 0) {
             state.completionPending = false;
             await this.sendDoneNotice(chatId, state);
@@ -1629,10 +1828,7 @@ export class TeleTopazService {
         const completedReply = state.lastAssistantMessageText;
         state.activePrompt = undefined;
         state.lastAssistantMessageText = undefined;
-        if (state.processingTimer) {
-          clearTimeout(state.processingTimer);
-          state.processingTimer = undefined;
-        }
+        this.clearProcessingTimer(state);
         await this.persistSessionMemory(chatId, state.workDir, completedPrompt, completedReply);
         if (state.pendingTasks.length === 0) {
           if (state.awaitingReply) {
@@ -2046,6 +2242,9 @@ export class TeleTopazService {
       lastAssistantMessageHash: undefined,
       lastAssistantMessageText: undefined,
       promptCycles: 0,
+      sessionCreatedAt: undefined,
+      sessionLastActivityAt: undefined,
+      pendingRecovery: undefined,
       starredModels: [],
       cachedDirs: [],
       personaLoaded: false,
