@@ -6,9 +6,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "node --env-file=.env --enable-source-maps dist/index.js",
-    "prestart": "npm run build",
-    "start": "node dist/index.js",
-    "start:hot": "node scripts/launcher.js",
+    "start": "node scripts/launcher.js",
+    "start:direct": "npm run build && node dist/index.js",
     "setup:secrets": "tsx scripts/setup-secrets.ts",
     "test": "vitest run",
     "test:watch": "vitest"
