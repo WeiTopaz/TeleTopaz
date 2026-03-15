@@ -203,7 +203,7 @@ async function getPathRestriction(
     return "敏感檔案需改用已確認的 shell / 編輯流程處理。";
   }
   if (!isWithinDirectory(workspaceDir, resolvedPath)) {
-    return "讀取工具僅允許存取目前工作區。";
+    return "讀取工具僅允許存取目前專案。";
   }
   return undefined;
 }
@@ -331,7 +331,8 @@ export class TeleTopazService {
       logger.info(`🤖 使用預設模型: ${defaultModel}`);
     }
     logger.info("✅ 可用命令：");
-    logger.info("  /project - 選擇工作區");
+    logger.info("  /project - 選擇專案");
+    logger.info("  /newproject - 建立新專案");
     logger.info("  /model - 切換模型 (Auto/Manual)");
     logger.info("  /info - 說明");
     logger.info("  /clear - 清除對話與附件");
@@ -559,7 +560,7 @@ export class TeleTopazService {
 
     const canBootstrapAutoSession = state.mode === "auto" && Boolean(state.workDir) && !state.session;
     if (!state.workDir || (!state.session && !canBootstrapAutoSession)) {
-      await this.safeSend(chatId, "請先使用 /project 選擇工作區。", message.message_id);
+      await this.safeSend(chatId, "請先使用 /project 選擇專案。", message.message_id);
       return;
     }
 
@@ -1035,6 +1036,9 @@ export class TeleTopazService {
       case "/project":
         await this.sendDirectoryList(chatId);
         return;
+      case "/newproject":
+        await this.handleNewProject(chatId, args.join(" "));
+        return;
       case "/model":
         await this.handleModelCommand(chatId, args[0]);
         return;
@@ -1453,7 +1457,7 @@ export class TeleTopazService {
   private async sendDirectoryList(chatId: number): Promise<void> {
     const dirs = await this.loadAllowedDirectories();
     if (!dirs.length) {
-      await this.safeSend(chatId, "沒有可用的工作區。", undefined);
+      await this.safeSend(chatId, "沒有可用的專案。", undefined);
       return;
     }
 
@@ -1470,7 +1474,7 @@ export class TeleTopazService {
     const state = this.getOrCreateState(chatId);
     state.cachedDirs = dirs;
 
-    await this.safeSend(chatId, "請選擇工作區：", undefined, keyboard);
+    await this.safeSend(chatId, "請選擇專案：", undefined, keyboard);
   }
 
   private async sendModelList(chatId: number, models: string[], current?: string): Promise<void> {
@@ -1539,7 +1543,7 @@ export class TeleTopazService {
     if (state.workDir) {
       await this.createSession(chatId, state.workDir, model);
     } else {
-      await this.safeSend(chatId, "尚未選擇工作區，請先選擇：", undefined);
+      await this.safeSend(chatId, "尚未選擇專案，請先選擇：", undefined);
       await this.sendDirectoryList(chatId);
     }
   }
@@ -1574,7 +1578,8 @@ export class TeleTopazService {
     lines.push(
       "",
       "📌 指令：","",
-      "/project — 選擇工作區","",
+      "/project — 選擇專案","",
+      "/newproject — 建立新專案（例：/newproject MyApp）","",
       "/model — 切換 AI 模型 (Auto/Manual)","",
       "/info — 說明","",
       "/clear — 清除對話與附件","",
@@ -1596,6 +1601,46 @@ export class TeleTopazService {
     };
 
     await this.safeSend(chatId, lines.join("\n"), undefined, keyboard);
+  }
+
+  /** /newproject — create a new project directory under the current workspace. */
+  private async handleNewProject(chatId: number, name: string): Promise<void> {
+    const state = this.getOrCreateState(chatId);
+
+    if (!state.workDir) {
+      await this.safeSend(chatId, "請先使用 /project 選擇專案。", undefined);
+      return;
+    }
+
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      await this.safeSend(chatId, "❌ 請提供專案名稱（例：/newproject MyApp）。", undefined);
+      return;
+    }
+
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(trimmedName)) {
+      await this.safeSend(chatId, "❌ 專案名稱僅允許英數字、底線與連字號（1–64 字元）。", undefined);
+      return;
+    }
+
+    const workspaceDir = path.dirname(state.workDir);
+    const targetPath = path.join(workspaceDir, trimmedName);
+
+    try {
+      const exists = await fs.stat(targetPath).then(() => true).catch(() => false);
+      if (exists) {
+        await this.safeSend(chatId, `❌ 專案 ${trimmedName} 已存在。`, undefined);
+        return;
+      }
+
+      await fs.mkdir(targetPath, { recursive: true });
+
+      const workspaceLabel = path.basename(workspaceDir);
+      await this.safeSend(chatId, `✅ 專案 ${trimmedName} 已建立於工作區 ${workspaceLabel}。`, undefined);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await this.safeSend(chatId, `❌ 建立專案失敗：${msg}`, undefined);
+    }
   }
 
   /** /clear — clear attachments + restart conversation, keeping project & model. */
@@ -2529,7 +2574,8 @@ export class TeleTopazService {
       `🔇 安靜模式：${state.silentMode ? "開啟" : "關閉"}`,
       "",
       "📌 指令：",
-      "/project — 選擇工作區","",
+      "/project — 選擇專案","",
+      "/newproject — 建立新專案（例：/newproject MyApp）","",
       "/model — 切換 AI 模型 (Auto/Manual)","",
       "/info — 說明","",
       "/clear — 清除對話與附件","",
