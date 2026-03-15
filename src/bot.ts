@@ -258,6 +258,7 @@ const COMMANDS = [
   "/i",
   "/clear",
   "/allowall",
+  "/silent",
   "/restart",
   "/quit"
 ];
@@ -334,6 +335,8 @@ export class TeleTopazService {
     logger.info("  /model - 切換模型 (Auto/Manual)");
     logger.info("  /info - 說明");
     logger.info("  /clear - 清除對話與附件");
+    logger.info("  /allowall - 切換全部允許/操作確認模式");
+    logger.info("  /silent - 切換安靜/正常通知模式");
     logger.info("  /restart - 熱啟動 (需搭配 start:hot)");
     logger.info("  /quit - 關閉Bot");
     logger.info("  /help - 顯示說明與指令列表");
@@ -656,20 +659,24 @@ export class TeleTopazService {
     state.receivedAssistantMessage = false;
     state.lastAssistantMessageHash = undefined;
     state.lastAssistantMessageText = undefined;
+    state.silentAnchorMessageId = undefined;
     this.touchSession(state);
   }
 
   private scheduleProcessingTimer(state: AgentContext): void {
     this.clearProcessingTimer(state);
     state.processingTimer = setTimeout(() => {
-      if (state.processingMessageId) {
+      const targetMessageId = state.silentMode
+        ? (state.silentAnchorMessageId ?? state.processingMessageId)
+        : state.processingMessageId;
+      if (targetMessageId) {
         const modelEntry = state.model
           ? this.formatModelEntry(state.provider, state.model)
           : this.formatResolvedModelEntry(state.coreModel ?? state.routerModel);
         this.api
           .editMessageText({
             chat_id: state.chatId,
-            message_id: state.processingMessageId,
+            message_id: targetMessageId,
             text: this.prepareOutgoingText(state.chatId, `⏳處理中…仍在等待 ${modelEntry} 回覆`),
             parse_mode: "MarkdownV2"
           })
@@ -697,12 +704,11 @@ export class TeleTopazService {
     this.preparePromptDispatch(state, prompt, replyTo);
     await quotaService.increment(String(state.chatId), state.provider, state.model ?? "unknown");
 
-    const processing = await this.safeSend(
-      state.chatId,
-      `⏳處理中：${prompt.slice(0, 80)}`,
-      replyTo
-    );
-    state.processingMessageId = processing?.message_id;
+    const processingText = `⏳處理中：${prompt.slice(0, 80)}`;
+    const processing = state.silentMode
+      ? await this.silentSend(state.chatId, processingText, replyTo)
+      : await this.safeSend(state.chatId, processingText, replyTo);
+    state.processingMessageId = processing?.message_id ?? (state.silentMode ? state.silentAnchorMessageId : undefined);
     this.scheduleProcessingTimer(state);
 
     logger.info("Prompt sending", { chatId: state.chatId });
@@ -1042,6 +1048,9 @@ export class TeleTopazService {
       case "/allowall":
         await this.handleAllowAllToggle(chatId);
         return;
+      case "/silent":
+        await this.handleSilentToggle(chatId);
+        return;
       case "/restart":
         if (message.date < this.startTimestamp) return;
         await this.handleRestart(chatId);
@@ -1182,6 +1191,18 @@ export class TeleTopazService {
     const statusText = state.allowAll
       ? "🔓 已切換為「全部允許」模式，工具操作將自動批准，不再逐次詢問。\n再次輸入 /allowall 可回到確認模式。"
       : "🔒 已切換回「操作確認」模式，高風險操作將逐次詢問。";
+    await this.safeSend(chatId, statusText);
+  }
+
+  private async handleSilentToggle(chatId: number): Promise<void> {
+    const state = this.getOrCreateState(chatId);
+    state.silentMode = !state.silentMode;
+    if (!state.silentMode) {
+      state.silentAnchorMessageId = undefined;
+    }
+    const statusText = state.silentMode
+      ? "🔇 已開啟安靜模式，中間訊息將整合顯示，減少通知。\n再次輸入 /silent 可關閉。"
+      : "🔔 已關閉安靜模式，訊息將正常發送。";
     await this.safeSend(chatId, statusText);
   }
 
@@ -1539,7 +1560,8 @@ export class TeleTopazService {
       `⚙️ ${modelLabel}`,
       `📂 ${projectLabel}`,
       `📊 使用量：${usage} (今日/本月)`,
-      `🔐 操作確認：${state.allowAll ? "全部允許" : "逐次確認"}`
+      `🔐 操作確認：${state.allowAll ? "全部允許" : "逐次確認"}`,
+      `🔇 安靜模式：${state.silentMode ? "開啟" : "關閉"}`
     ];
 
     if (stats.stats.byModel && Object.keys(stats.stats.byModel).length > 0) {
@@ -1557,6 +1579,7 @@ export class TeleTopazService {
       "/info — 說明","",
       "/clear — 清除對話與附件","",
       "/allowall — 切換全部允許/操作確認模式","",
+      "/silent — 切換安靜/正常通知模式","",
       "/restart — 熱啟動","",
       "/quit — 關閉Bot","",
       "/help — 顯示說明與指令列表"
@@ -1581,6 +1604,7 @@ export class TeleTopazService {
     // Clear attachments
     state.attachments = [];
     state.pendingTasks = [];
+    state.silentAnchorMessageId = undefined;
 
     if (!state.workDir || !state.model) {
       await this.safeSend(chatId, "尚未建立工作階段。", undefined);
@@ -1863,8 +1887,12 @@ export class TeleTopazService {
         state.receivedAssistantMessage = false;
         state.lastAssistantMessageHash = undefined;
         state.lastAssistantMessageText = undefined;
-        const processing = await this.safeSend(chatId, `⏳處理中：${nextPrompt.slice(0, 80)}`, state.replyToMessageId);
-        state.processingMessageId = processing?.message_id;
+        state.silentAnchorMessageId = undefined;
+        const enqueuedText = `⏳處理中：${nextPrompt.slice(0, 80)}`;
+        const processing = state.silentMode
+          ? await this.silentSend(chatId, enqueuedText, state.replyToMessageId)
+          : await this.safeSend(chatId, enqueuedText, state.replyToMessageId);
+        state.processingMessageId = processing?.message_id ?? (state.silentMode ? state.silentAnchorMessageId : undefined);
         const policy = await this.guardrailsPromise;
         const promptLimit = policy.maxPromptLength ?? MESSAGE_LIMIT;
         const sendResult = await this.sendPrompt(state, nextPrompt, state.replyToMessageId, promptLimit);
@@ -1962,6 +1990,23 @@ export class TeleTopazService {
     const paramsKey = this.createResultKey(chatId);
     const resultKey = this.createResultKey(chatId);
     const summary = redact((argsText ?? "").slice(0, TOOL_PREVIEW_LEN));
+    const toolText = `工具執行中：${name ?? "未知"}\n參數摘要：${summary}`;
+
+    if (state.silentMode) {
+      await this.silentSend(chatId, toolText);
+      if (argsText) this.toolParams.set(paramsKey, redact(argsText));
+      if (callId) {
+        const tracking: ToolTracking = {
+          messageId: state.silentAnchorMessageId ?? 0,
+          resultKey,
+          paramsKey
+        };
+        if (name) tracking.toolName = name;
+        tracking.callId = callId;
+        state.toolMessageMap.set(callId, tracking);
+      }
+      return;
+    }
 
     const keyboard: InlineKeyboardMarkup = {
       inline_keyboard: [
@@ -1974,7 +2019,7 @@ export class TeleTopazService {
 
     const message = await this.safeSend(
       chatId,
-      `工具執行中：${name ?? "未知"}\n參數摘要：${summary}`,
+      toolText,
       undefined,
       keyboard
     );
@@ -2011,45 +2056,54 @@ export class TeleTopazService {
 
     if (tracking) {
       this.toolResults.set(tracking.resultKey, guarded.text);
-      await this.editMessageSafe(
-        chatId,
-        tracking.messageId,
-        `工具${status}：${tracking.toolName ?? "未知"}\n結果摘要：${summary}`,
-        {
-          inline_keyboard: [
-            [
-              { text: "📋 參數", callback_data: `peek.arg:${tracking.paramsKey}` },
-              { text: "📄 結果", callback_data: `peek.res:${tracking.resultKey}` }
+
+      if (state.silentMode && state.silentAnchorMessageId) {
+        await this.editMessageSafe(
+          chatId,
+          state.silentAnchorMessageId,
+          `工具${status}：${tracking.toolName ?? "未知"}\n結果摘要：${summary}`
+        );
+      } else {
+        await this.editMessageSafe(
+          chatId,
+          tracking.messageId,
+          `工具${status}：${tracking.toolName ?? "未知"}\n結果摘要：${summary}`,
+          {
+            inline_keyboard: [
+              [
+                { text: "📋 參數", callback_data: `peek.arg:${tracking.paramsKey}` },
+                { text: "📄 結果", callback_data: `peek.res:${tracking.resultKey}` }
+              ]
             ]
-          ]
-        }
-      );
-      const desiredEmoji = error ? "❌" : "✅";
-      let reactionEmoji = this.pickReactionEmoji(state, desiredEmoji);
-      if (reactionEmoji) {
-        try {
-          await this.api.setMessageReaction({
-            chat_id: chatId,
-            message_id: tracking.messageId,
-            reaction: [{ type: "emoji", emoji: reactionEmoji }]
-          });
-        } catch (err) {
-          if (isTelegramReactionInvalid(err)) {
-            await this.refreshReactionEmojis(chatId, state);
-            reactionEmoji = this.pickReactionEmoji(state, desiredEmoji);
-            if (reactionEmoji) {
-              try {
-                await this.api.setMessageReaction({
-                  chat_id: chatId,
-                  message_id: tracking.messageId,
-                  reaction: [{ type: "emoji", emoji: reactionEmoji }]
-                });
-              } catch (retryErr) {
-                logger.warn("Set reaction retry failed", retryErr);
+          }
+        );
+        const desiredEmoji = error ? "❌" : "✅";
+        let reactionEmoji = this.pickReactionEmoji(state, desiredEmoji);
+        if (reactionEmoji) {
+          try {
+            await this.api.setMessageReaction({
+              chat_id: chatId,
+              message_id: tracking.messageId,
+              reaction: [{ type: "emoji", emoji: reactionEmoji }]
+            });
+          } catch (err) {
+            if (isTelegramReactionInvalid(err)) {
+              await this.refreshReactionEmojis(chatId, state);
+              reactionEmoji = this.pickReactionEmoji(state, desiredEmoji);
+              if (reactionEmoji) {
+                try {
+                  await this.api.setMessageReaction({
+                    chat_id: chatId,
+                    message_id: tracking.messageId,
+                    reaction: [{ type: "emoji", emoji: reactionEmoji }]
+                  });
+                } catch (retryErr) {
+                  logger.warn("Set reaction retry failed", retryErr);
+                }
               }
+            } else {
+              logger.warn("Set reaction failed", err);
             }
-          } else {
-            logger.warn("Set reaction failed", err);
           }
         }
       }
@@ -2110,6 +2164,13 @@ export class TeleTopazService {
   }
 
   private async sendDoneNotice(chatId: number, state: AgentContext): Promise<void> {
+    if (state.silentMode) {
+      const summary = state.receivedAssistantMessage
+        ? "✅完成"
+        : `✅完成：${state.activePrompt?.slice(0, 80) ?? ""}`;
+      await this.silentSend(chatId, summary);
+      return;
+    }
     if (state.processingMessageId) {
       const summary = state.receivedAssistantMessage
         ? "✅完成"
@@ -2218,6 +2279,23 @@ export class TeleTopazService {
     }
   }
 
+  private async silentSend(
+    chatId: number,
+    text: string,
+    replyTo?: number
+  ): Promise<TelegramMessage | undefined> {
+    const state = this.getOrCreateState(chatId);
+    if (state.silentAnchorMessageId) {
+      await this.editMessageSafe(chatId, state.silentAnchorMessageId, text);
+      return undefined;
+    }
+    const msg = await this.safeSend(chatId, text, replyTo);
+    if (msg) {
+      state.silentAnchorMessageId = msg.message_id;
+    }
+    return msg;
+  }
+
   private getOrCreateState(chatId: number): AgentContext {
     const existing = this.states.get(chatId);
     if (existing) return existing;
@@ -2260,7 +2338,9 @@ export class TeleTopazService {
       cachedDirs: [],
       personaLoaded: false,
       reactionEmojis: null,
-      allowAll: false
+      allowAll: false,
+      silentMode: true,
+      silentAnchorMessageId: undefined
     };
 
     this.states.set(chatId, state);
@@ -2446,6 +2526,7 @@ export class TeleTopazService {
       `⚙️ ${modelLabel}`,
       `📂 ${projectLabel}`,
       `🔐 操作確認：${state.allowAll ? "全部允許" : "逐次確認"}`,
+      `🔇 安靜模式：${state.silentMode ? "開啟" : "關閉"}`,
       "",
       "📌 指令：",
       "/project — 選擇工作區","",
@@ -2453,6 +2534,7 @@ export class TeleTopazService {
       "/info — 說明","",
       "/clear — 清除對話與附件","",
       "/allowall — 切換全部允許/操作確認模式","",
+      "/silent — 切換安靜/正常通知模式","",
       "/restart — 熱啟動","",
       "/quit — 關閉Bot","",
       "/help — 顯示說明與指令列表"

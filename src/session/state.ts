@@ -64,4 +64,6 @@ export type AgentContext = {
   personaLoaded: boolean;
   reactionEmojis: string[] | null;
   allowAll: boolean;
+  silentMode: boolean;
+  silentAnchorMessageId: number | undefined;
 };
