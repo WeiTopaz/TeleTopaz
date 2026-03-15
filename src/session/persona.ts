@@ -19,7 +19,7 @@ async function readOptional(filePath: string): Promise<string | undefined> {
 
 export async function buildPersonaPrompt(cwd: string, provider?: string, memoryContext?: string): Promise<string> {
   const sections: string[] = [];
-  const providerName = provider === "gemini" ? "Google Gemini" : "GitHub Copilot SDK";
+  const providerName = provider === "gemini" ? "Google Gemini" : provider === "claude-code" ? "Claude Code" : "GitHub Copilot SDK";
   sections.push(`你是 ${providerName} 的代理。工作目錄：${cwd}`);
 
   const files: { title: string; path: string }[] = [

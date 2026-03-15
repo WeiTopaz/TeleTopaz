@@ -2,7 +2,7 @@ import type { ProviderType } from "../provider/types.js";
 
 const DEFAULT_MODEL_ENV = "TELETOPAZ_DEFAULT_MODEL";
 
-export type CliProviderLabel = "ctcli" | "gmcli";
+export type CliProviderLabel = "ctcli" | "gmcli" | "cccli";
 
 export type SupportedModel = {
   provider: ProviderType;
@@ -17,7 +17,8 @@ export const DEFAULT_MODEL_ENTRY = `gmcli:${DEFAULT_CORE_MODEL}` as const;
 
 const PROVIDER_TO_CLI: Record<ProviderType, CliProviderLabel> = {
   copilot: "ctcli",
-  gemini: "gmcli"
+  gemini: "gmcli",
+  "claude-code": "cccli"
 };
 
 const CLI_TO_PROVIDER: Record<string, ProviderType> = {
@@ -26,7 +27,10 @@ const CLI_TO_PROVIDER: Record<string, ProviderType> = {
   copilotcli: "copilot",
   gmcli: "gemini",
   gemini: "gemini",
-  geminicli: "gemini"
+  geminicli: "gemini",
+  cccli: "claude-code",
+  claudecode: "claude-code",
+  "claude-code": "claude-code"
 };
 
 const SUPPORTED_MODELS: SupportedModel[] = [
@@ -34,7 +38,9 @@ const SUPPORTED_MODELS: SupportedModel[] = [
   { provider: "copilot", cli: "ctcli", model: "gpt-5-mini", entry: "ctcli:gpt-5-mini" },
   { provider: "copilot", cli: "ctcli", model: "claude-opus-4.6", entry: "ctcli:claude-opus-4.6" },
   { provider: "copilot", cli: "ctcli", model: "claude-sonnet-4.6", entry: "ctcli:claude-sonnet-4.6" },
-  { provider: "gemini", cli: "gmcli", model: DEFAULT_CORE_MODEL, entry: DEFAULT_MODEL_ENTRY }
+  { provider: "gemini", cli: "gmcli", model: DEFAULT_CORE_MODEL, entry: DEFAULT_MODEL_ENTRY },
+  { provider: "claude-code", cli: "cccli", model: "claude-opus-4.6", entry: "cccli:claude-opus-4.6" },
+  { provider: "claude-code", cli: "cccli", model: "claude-sonnet-4.6", entry: "cccli:claude-sonnet-4.6" }
 ];
 
 const SUPPORTED_MODEL_ENTRIES = new Set(SUPPORTED_MODELS.map((item) => item.entry));
@@ -44,7 +50,14 @@ export function cliLabelForProvider(provider: ProviderType): CliProviderLabel {
 }
 
 export function inferProviderFromModel(model: string): ProviderType {
-  return model.toLowerCase().includes("gemini") ? "gemini" : "copilot";
+  const lower = model.toLowerCase();
+  if (lower.includes("gemini")) return "gemini";
+  // Check if the model is registered under claude-code provider
+  const ccModel = SUPPORTED_MODELS.find(
+    (m) => m.provider === "claude-code" && m.model === model
+  );
+  if (ccModel) return "claude-code";
+  return "copilot";
 }
 
 export function formatModelEntry(provider: ProviderType, model: string): `${CliProviderLabel}:${string}` {

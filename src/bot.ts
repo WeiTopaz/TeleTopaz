@@ -15,6 +15,7 @@ import { logger } from "./util/logger.js";
 import { parseFingerprints } from "./util/tls.js";
 import { CopilotSdkClient, normalizeModelInfos } from "./copilot/sdk.js";
 import { GeminiSdkClient } from "./gemini/sdk.js";
+import { ClaudeCodeSdkClient } from "./claude/sdk.js";
 import { quotaService } from "./services/quota.js";
 import type {
   AiAttachment,
@@ -1732,7 +1733,7 @@ export class TeleTopazService {
       const skillDirectories = state.provider === "copilot"
         ? await this.collectSkillDirectories(canonicalCwd)
         : undefined;
-      const approvalMode = state.provider === "gemini" ? "plan" : undefined;
+      const approvalMode = (state.provider === "gemini" || state.provider === "claude-code") ? "plan" : undefined;
 
       const models = await this.getModels(state.provider);
       const useModel = model ?? state.model ?? getDefaultModel(models);
@@ -2506,6 +2507,9 @@ export class TeleTopazService {
   private createProviderClient(provider: ProviderType): AiClient {
     if (provider === "gemini") {
       return new GeminiSdkClient();
+    }
+    if (provider === "claude-code") {
+      return new ClaudeCodeSdkClient();
     }
     return new CopilotSdkClient();
   }

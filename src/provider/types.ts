@@ -1,4 +1,4 @@
-export type ProviderType = "copilot" | "gemini";
+export type ProviderType = "copilot" | "gemini" | "claude-code";
 
 export type AiEvent = {
   type?: string;
