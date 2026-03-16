@@ -336,28 +336,34 @@ export class ClaudeCodeSdkSession implements AiSession {
         for (const block of msg.content as Array<Record<string, unknown>>) {
           if (block.type === "tool_use") {
             const toolName = block.name as string | undefined;
+            const toolCallId = block.id as string | undefined;
             const toolArgs = block.input as Record<string, unknown> | undefined;
             this.emit({
               type: "tool.execution_start",
-              data: { toolName, toolArgs }
+              data: { toolName, toolCallId, toolArgs }
             });
           }
         }
       }
     }
 
-    // 工具結果事件
+    // 工具結果事件：user 訊息的 content 陣列中包含 tool_result 型別的區塊
     if (event.type === "user") {
-      const toolResult = event.tool_use_result as Record<string, unknown> | undefined;
-      if (toolResult) {
-        this.emit({
-          type: "tool.execution_complete",
-          data: {
-            toolName: undefined,
-            status: "success",
-            output: toolResult
+      const msg = event.message as Record<string, unknown> | undefined;
+      if (msg?.content && Array.isArray(msg.content)) {
+        for (const block of msg.content as Array<Record<string, unknown>>) {
+          if (block.type === "tool_result") {
+            const toolUseId = block.tool_use_id as string | undefined;
+            this.emit({
+              type: "tool.execution_complete",
+              data: {
+                toolCallId: toolUseId,
+                status: "success",
+                output: block.content
+              }
+            });
           }
-        });
+        }
       }
     }
   }

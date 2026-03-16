@@ -419,7 +419,21 @@ export class TeleTopazService {
   }
 
   private async clearOfflineUpdates(): Promise<void> {
-    let updates = await this.api.getUpdates(undefined, 0, 100);
+    const maxRetries = 3;
+    let attempt = 0;
+    let updates: TelegramUpdate[];
+    while (true) {
+      try {
+        updates = await this.api.getUpdates(undefined, 0, 100);
+        break;
+      } catch (err) {
+        attempt++;
+        if (attempt >= maxRetries) throw err;
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn(`clearOfflineUpdates retry ${attempt}/${maxRetries}`, msg);
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
+    }
     while (updates.length > 0) {
       const last = updates[updates.length - 1];
       if (last) this.offset = last.update_id + 1;
@@ -1795,7 +1809,12 @@ export class TeleTopazService {
         }
       });
 
-      session.onEvent((event) => this.enqueueEvent(chatId, event));
+      state.sessionVersion += 1;
+      const capturedVersion = state.sessionVersion;
+      session.onEvent((event) => {
+        if (state.sessionVersion !== capturedVersion) return;
+        void this.enqueueEvent(chatId, event);
+      });
 
       state.client = client;
       state.session = session;
@@ -2386,7 +2405,8 @@ export class TeleTopazService {
       reactionEmojis: null,
       allowAll: false,
       silentMode: true,
-      silentAnchorMessageId: undefined
+      silentAnchorMessageId: undefined,
+      sessionVersion: 0
     };
 
     this.states.set(chatId, state);

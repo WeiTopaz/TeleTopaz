@@ -27,7 +27,10 @@ export class TelegramApi {
   constructor(options: TelegramApiOptions) {
     this.token = options.token;
     this.agent = new https.Agent({
-      checkServerIdentity: buildCheckServerIdentity(TELEGRAM_HOST, options.fingerprints)
+      checkServerIdentity: buildCheckServerIdentity(TELEGRAM_HOST, options.fingerprints),
+      // Happy Eyeballs: 同時嘗試 IPv4/IPv6，自動選擇較快的連線
+      autoSelectFamily: true,
+      autoSelectFamilyAttemptTimeout: 2000,
     });
   }
 

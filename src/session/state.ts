@@ -66,4 +66,5 @@ export type AgentContext = {
   allowAll: boolean;
   silentMode: boolean;
   silentAnchorMessageId: number | undefined;
+  sessionVersion: number;
 };
