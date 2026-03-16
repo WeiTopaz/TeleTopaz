@@ -97,7 +97,12 @@ export function buildSandboxProfile(options?: SandboxProfileOptions): string {
     "; Allow PTY devices needed to spawn interactive child processes (minimal PTY access)",
     "(allow file-read* (subpath \"/dev/ptmx\"))",
     "(allow file-write* (subpath \"/dev/ptmx\"))",
-    "(allow file-read* (subpath \"/dev/pts\"))"
+    "(allow file-read* (subpath \"/dev/pts\"))",
+    "",
+    "; macOS PTY slave devices (/dev/ttysNNN) — required for node-pty",
+    '(allow file-read* (regex #"^/dev/ttys[0-9]+$"))',
+    '(allow file-write* (regex #"^/dev/ttys[0-9]+$"))',
+    '(allow file-ioctl (regex #"^/dev/ttys[0-9]+$"))'
   );
 
   return lines.join("\n");

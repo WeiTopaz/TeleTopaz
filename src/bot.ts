@@ -15,6 +15,7 @@ import { logger } from "./util/logger.js";
 import { parseFingerprints } from "./util/tls.js";
 import { CopilotSdkClient, normalizeModelInfos } from "./copilot/sdk.js";
 import { GeminiSdkClient } from "./gemini/sdk.js";
+import { GeminiPtyClient } from "./gemini/pty-session.js";
 import { ClaudeCodeSdkClient } from "./claude/sdk.js";
 import { quotaService } from "./services/quota.js";
 import type {
@@ -2506,6 +2507,9 @@ export class TeleTopazService {
 
   private createProviderClient(provider: ProviderType): AiClient {
     if (provider === "gemini") {
+      if (process.env.TELETOPAZ_USE_PTY === "1") {
+        return new GeminiPtyClient();
+      }
       return new GeminiSdkClient();
     }
     if (provider === "claude-code") {
