@@ -66,7 +66,9 @@ export class TelegramApi {
         }
       );
       req.on("timeout", () => {
-        req.destroy(new Error(`Telegram API timeout: ${method} (${timeout}ms)`));
+        const err = new Error(`Telegram API timeout: ${method} (${timeout}ms)`);
+        (err as NodeJS.ErrnoException).code = "ETIMEDOUT";
+        req.destroy(err);
       });
       req.on("error", reject);
       req.write(body);
@@ -112,7 +114,9 @@ export class TelegramApi {
         }
       );
       req.on("timeout", () => {
-        req.destroy(new Error(`Telegram API timeout: ${method} (${REQUEST_TIMEOUT_MS}ms)`));
+        const err = new Error(`Telegram API timeout: ${method} (${REQUEST_TIMEOUT_MS}ms)`);
+        (err as NodeJS.ErrnoException).code = "ETIMEDOUT";
+        req.destroy(err);
       });
       req.on("error", reject);
       req.write(body);
