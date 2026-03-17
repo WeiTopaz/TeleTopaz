@@ -90,6 +90,7 @@ export function buildSandboxProfile(options?: SandboxProfileOptions): string {
     `(allow file-write* (subpath "${home}/.codex"))`,
     `(allow file-write* (subpath "${home}/.gemini"))`,
     `(allow file-write* (subpath "${home}/.claude"))`,
+    `(allow file-write* (literal "${home}/.claude.json"))`,
     "",
     "; Allow /dev/null for child processes like git",
     "(allow file-read* (subpath \"/dev/null\"))",

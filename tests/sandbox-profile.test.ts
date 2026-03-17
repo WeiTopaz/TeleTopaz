@@ -32,6 +32,7 @@ describe("sandbox profile", () => {
     expect(profile).toContain(`(allow file-write* (subpath "${home}/.copilot"))`);
     expect(profile).toContain(`(allow file-write* (subpath "${home}/.codex"))`);
     expect(profile).toContain(`(allow file-write* (subpath "${home}/.claude"))`);
+    expect(profile).toContain(`(allow file-write* (literal "${home}/.claude.json"))`);
     expect(profile).toContain("(allow file-read* (subpath \"/dev/ptmx\"))");
     expect(profile).toContain("(allow file-write* (subpath \"/dev/ptmx\"))");
     expect(profile).toContain("(allow file-read* (subpath \"/dev/pts\"))");

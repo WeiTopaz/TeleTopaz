@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import type { AiAttachment, AiClient, AiSession, AiEvent, AiSessionOptions, AiProviderInfo } from "../provider/types.js";
 
 const retryBackoffsMs = [1000, 2000, 5000];
@@ -43,6 +45,20 @@ function sleep(ms: number, signal: AbortSignal): Promise<boolean> {
 
 function toAbortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error("aborted");
+}
+
+function buildClaudeHomeAccessSettings(): string {
+  return JSON.stringify({
+    permissions: {
+      allow: [
+        "Read(~/.claude/**)",
+        "Read(~/.claude.json)",
+        "Edit(~/.claude/**)",
+        "Edit(~/.claude.json)"
+      ],
+      additionalDirectories: ["~/.claude"]
+    }
+  });
 }
 
 export class ClaudeCodeSdkClient implements AiClient {
@@ -199,13 +215,18 @@ export class ClaudeCodeSdkSession implements AiSession {
       const modelFlag = resolveModelFlag(this.options.model);
       const permissionMode = this.resolvePermissionMode();
       const cwd = this.options.workingDirectory || process.cwd();
+      const claudeConfigDir = path.join(os.homedir(), ".claude");
+      const claudeSettings = buildClaudeHomeAccessSettings();
 
       const args = [
         "-p",                               // print mode（非互動）
         "--output-format", "stream-json",   // 串流 JSON 輸出
         "--verbose",                        // stream-json 需要 --verbose
         "--model", modelFlag,
-        "--permission-mode", permissionMode
+        "--permission-mode", permissionMode,
+        // Claude Code 將 ~/.claude 視為使用者設定目錄；顯式納入權限範圍避免被 CLI 拒絕。
+        "--add-dir", claudeConfigDir,
+        "--settings", claudeSettings
       ];
 
       // 追加系統提示詞（如果有且非空）
