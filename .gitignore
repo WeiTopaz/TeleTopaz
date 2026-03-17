@@ -48,6 +48,7 @@ dist/
 .gemini/
 .github/
 .codex/
+.claude/
 CLAUDE.md
 AGENTS.md
 
