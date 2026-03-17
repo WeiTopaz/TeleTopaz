@@ -573,6 +573,7 @@ export class TeleTopazService {
 
     const state = this.getOrCreateState(chatId);
     state.pendingRecovery = undefined;
+    state.lastProactiveRebuildNotice = undefined;
 
     if (message.photo || message.document) {
       const handled = await this.handleImages(message, state);
@@ -862,7 +863,24 @@ export class TeleTopazService {
       }
 
       if (!isQuietHours(now)) {
-        await this.safeSend(chatId, `♻️ ${reason}，已自動重建工作階段。下一則訊息可直接繼續。`);
+        const existing = state.lastProactiveRebuildNotice;
+        if (existing) {
+          const nextCount = existing.count + 1;
+          await this.editMessageSafe(
+            chatId,
+            existing.messageId,
+            `♻️ ${reason}，已自動重建工作階段。下一則訊息可直接繼續。(${nextCount})`
+          );
+          state.lastProactiveRebuildNotice = { messageId: existing.messageId, count: nextCount };
+        } else {
+          const sent = await this.safeSend(
+            chatId,
+            `♻️ ${reason}，已自動重建工作階段。下一則訊息可直接繼續。(1)`
+          );
+          if (sent) {
+            state.lastProactiveRebuildNotice = { messageId: sent.message_id, count: 1 };
+          }
+        }
       } else {
         logger.info("Proactive rebuild notification suppressed (quiet hours)", { chatId });
       }
@@ -2575,6 +2593,7 @@ export class TeleTopazService {
       sessionCreatedAt: undefined,
       sessionLastActivityAt: undefined,
       pendingRecovery: undefined,
+      lastProactiveRebuildNotice: undefined,
       starredModels: [],
       cachedDirs: [],
       personaLoaded: false,

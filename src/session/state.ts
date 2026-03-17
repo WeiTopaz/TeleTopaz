@@ -59,6 +59,10 @@ export type AgentContext = {
   sessionCreatedAt: number | undefined;
   sessionLastActivityAt: number | undefined;
   pendingRecovery: PendingRecovery | undefined;
+  lastProactiveRebuildNotice: {
+    messageId: number;
+    count: number;
+  } | undefined;
   starredModels: string[];
   cachedDirs: string[];
   personaLoaded: boolean;
