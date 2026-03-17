@@ -24,6 +24,7 @@ import type {
   AiPermissionHandler,
   AiPermissionRequest,
   AiPermissionResult,
+  AiSession,
   ProviderType
 } from "./provider/types.js";
 import { AgentContext, Attachment, ToolTracking, PendingTask } from "./session/state.js";
@@ -258,11 +259,20 @@ const COMMANDS = [
   "/info",
   "/i",
   "/clear",
+  "/router",
   "/allowall",
   "/silent",
   "/restart",
   "/quit"
 ];
+
+type RouterSnapshot = {
+  provider: ProviderType;
+  model: string | undefined;
+  mode: "manual" | "auto";
+  client: AiClient | undefined;
+  session: AiSession | undefined;
+};
 
 export class TeleTopazService {
   private readonly api: TelegramApi;
@@ -274,6 +284,7 @@ export class TeleTopazService {
   private readonly toolParams = new Map<string, string>();
   private readonly toolResults = new Map<string, string>();
   private readonly pendingToolConfirmations = new Map<string, { resolve: (allowed: boolean) => void }>();
+  private readonly routerCompletionCallbacks = new Map<number, () => Promise<void>>();
   private readonly sessionMemory = new SessionMemoryStore();
   private modelsCache = new Map<ProviderType, { models: string[]; fetchedAt: number }>();
   private readonly modelsTtlMs = 5 * 60 * 1000;
@@ -337,6 +348,7 @@ export class TeleTopazService {
     logger.info("  /model - 切換模型 (Auto/Manual)");
     logger.info("  /info - 說明");
     logger.info("  /clear - 清除對話與附件");
+    logger.info("  /router {prompt} - 使用 routerModel 執行單次對話，完成後自動還原");
     logger.info("  /allowall - 切換全部允許/操作確認模式");
     logger.info("  /silent - 切換安靜/正常通知模式");
     logger.info("  /restart - 熱啟動 (需搭配 start:hot)");
@@ -1064,6 +1076,11 @@ export class TeleTopazService {
       case "/clear":
         await this.handleClear(chatId);
         return;
+      case "/router": {
+        const prompt = args.join(" ").trim();
+        await this.handleRouterCommand(chatId, prompt);
+        return;
+      }
       case "/allowall":
         await this.handleAllowAllToggle(chatId);
         return;
@@ -1598,6 +1615,7 @@ export class TeleTopazService {
       "/model — 切換 AI 模型 (Auto/Manual)","",
       "/info — 說明","",
       "/clear — 清除對話與附件","",
+      "/router {prompt} — 使用 routerModel 執行單次對話，完成後自動還原","",
       "/allowall — 切換全部允許/操作確認模式","",
       "/silent — 切換安靜/正常通知模式","",
       "/restart — 熱啟動","",
@@ -1682,6 +1700,158 @@ export class TeleTopazService {
     await this.createSession(chatId, state.workDir, state.model);
     state.resetting = false;
     state.promptCycles = 0;
+  }
+
+  /** /router {prompt} — 使用 routerModel 執行單次對話，完成後自動還原所有狀態。 */
+  private async handleRouterCommand(chatId: number, prompt: string): Promise<void> {
+    const state = this.getOrCreateState(chatId);
+
+    if (!prompt) {
+      await this.safeSend(chatId, "⚠️ 請提供提示詞，例如：`/router 你好`");
+      return;
+    }
+
+    if (state.processing) {
+      await this.safeSend(chatId, "⚠️ 目前有其他對話正在處理中，請稍後再試。");
+      return;
+    }
+
+    if (!state.workDir) {
+      await this.safeSend(chatId, "⚠️ 請先選擇專案目錄（/project）");
+      return;
+    }
+
+    const routerModelEntry = state.routerModel ?? DEFAULT_ROUTER_MODEL;
+    const parsed = parseConfiguredModelEntry(routerModelEntry);
+    const routerEntry = formatConfiguredModelEntry(parsed.provider, parsed.model);
+
+    const snapshot: RouterSnapshot = {
+      provider: state.provider,
+      model: state.model,
+      mode: state.mode,
+      client: state.client,
+      session: state.session,
+    };
+
+    await this.safeSend(chatId, `🔀 使用 \`${routerEntry}\` 執行單次對話...`);
+
+    let tempClient: AiClient | undefined;
+
+    const restoreSnapshot = async (tempSession: AiSession) => {
+      try { await tempSession.destroy(); } catch {}
+      if (tempClient && tempClient !== snapshot.client) {
+        try { await tempClient.stop(); } catch {}
+      }
+      state.provider = snapshot.provider;
+      state.model = snapshot.model;
+      state.mode = snapshot.mode;
+      state.client = snapshot.client;
+      state.session = snapshot.session;
+      if (snapshot.session) {
+        state.sessionVersion += 1;
+        const restoredVersion = state.sessionVersion;
+        snapshot.session.onEvent((event) => {
+          if (state.sessionVersion !== restoredVersion) return;
+          void this.enqueueEvent(chatId, event);
+        });
+      }
+      const restoredEntry = snapshot.model
+        ? formatConfiguredModelEntry(snapshot.provider, snapshot.model)
+        : "原始設定";
+      await this.safeSend(chatId, `↩️ 已還原至 \`${restoredEntry}\``);
+    };
+
+    try {
+      if (parsed.provider !== state.provider || !state.client) {
+        tempClient = this.createProviderClient(parsed.provider);
+        await tempClient.start();
+      } else {
+        tempClient = state.client;
+      }
+
+      const canonicalCwd = await fs.realpath(state.workDir).catch(() => path.resolve(state.workDir!));
+      let memoryContext: string | undefined;
+      try {
+        memoryContext = await this.sessionMemory.buildContext({ chatId, workDir: canonicalCwd });
+      } catch {}
+      const systemPrompt = await buildPersonaPrompt(canonicalCwd, parsed.provider, memoryContext);
+      const approvalMode = (parsed.provider === "gemini" || parsed.provider === "claude-code") ? "plan" : undefined;
+
+      const tempSession = await tempClient.createSession({
+        model: parsed.model,
+        workingDirectory: canonicalCwd,
+        ...(approvalMode ? { approvalMode } : {}),
+        ...(systemPrompt ? { systemPrompt } : {}),
+        onPermissionRequest: this.createPermissionRequestHandler(chatId, canonicalCwd),
+        hooks: {
+          onPreToolUse: async (input: any) => {
+            const toolName: string | undefined = input?.toolName;
+            logger.info("PreToolUse (router)", { tool: toolName });
+            const readRestriction = await getReadToolRestriction(
+              toolName, input?.toolArgs, canonicalCwd,
+              typeof input?.cwd === "string" ? input.cwd : undefined
+            );
+            if (readRestriction) return { permissionDecision: "deny", permissionDecisionReason: readRestriction };
+            if (isWriteOrDeleteTool(toolName)) {
+              if (parsed.provider === "copilot") return { permissionDecision: "allow", modifiedArgs: input?.toolArgs };
+              const allowed = await this.requestInteractiveApproval(
+                chatId, toolName ?? "tool",
+                JSON.stringify(input?.toolArgs ?? {}).slice(0, TOOL_PREVIEW_LEN)
+              );
+              if (!allowed) return { permissionDecision: "deny" };
+            }
+            return { permissionDecision: "allow", modifiedArgs: input?.toolArgs };
+          },
+          onPostToolUse: async (input: any) => {
+            logger.info("PostToolUse (router)", { tool: input?.toolName });
+            return {};
+          },
+          onErrorOccurred: async (input: any) => {
+            logger.warn("AI error hook (router)", { context: input?.errorContext });
+            return { errorHandling: "retry" };
+          }
+        }
+      });
+
+      state.provider = parsed.provider;
+      state.model = parsed.model;
+      state.client = tempClient;
+      state.session = tempSession;
+      state.sessionVersion += 1;
+      const routerVersion = state.sessionVersion;
+
+      tempSession.onEvent((event) => {
+        if (state.sessionVersion !== routerVersion) return;
+        void this.enqueueEvent(chatId, event);
+      });
+
+      this.routerCompletionCallbacks.set(chatId, () => restoreSnapshot(tempSession));
+
+      await this.sendPreparedPrompt(state, prompt, undefined);
+    } catch (err) {
+      this.routerCompletionCallbacks.delete(chatId);
+      const currentSession = state.session;
+      state.provider = snapshot.provider;
+      state.model = snapshot.model;
+      state.mode = snapshot.mode;
+      state.client = snapshot.client;
+      state.session = snapshot.session;
+      if (currentSession && currentSession !== snapshot.session) {
+        try { await currentSession.destroy(); } catch {}
+      }
+      if (tempClient && tempClient !== snapshot.client) {
+        try { await tempClient.stop(); } catch {}
+      }
+      if (snapshot.session) {
+        state.sessionVersion += 1;
+        const restoredVersion = state.sessionVersion;
+        snapshot.session.onEvent((event) => {
+          if (state.sessionVersion !== restoredVersion) return;
+          void this.enqueueEvent(chatId, event);
+        });
+      }
+      await this.safeSend(chatId, `❌ Router 執行失敗：${String(err)}`);
+    }
   }
 
   private findActiveSessionState(): AgentContext | undefined {
@@ -1930,6 +2100,12 @@ export class TeleTopazService {
         state.lastAssistantMessageText = undefined;
         this.clearProcessingTimer(state);
         await this.persistSessionMemory(chatId, state.workDir, completedPrompt, completedReply);
+        const routerCallback = this.routerCompletionCallbacks.get(chatId);
+        if (routerCallback) {
+          this.routerCompletionCallbacks.delete(chatId);
+          await routerCallback();
+          // After restoring state, fall through to handle pending tasks with restored session
+        }
         if (state.pendingTasks.length === 0) {
           if (state.awaitingReply) {
             state.completionPending = true;
@@ -2603,6 +2779,7 @@ export class TeleTopazService {
       "/model — 切換 AI 模型 (Auto/Manual)","",
       "/info — 說明","",
       "/clear — 清除對話與附件","",
+      "/router {prompt} — 使用 routerModel 執行單次對話，完成後自動還原","",
       "/allowall — 切換全部允許/操作確認模式","",
       "/silent — 切換安靜/正常通知模式","",
       "/restart — 熱啟動","",
