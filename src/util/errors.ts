@@ -8,7 +8,8 @@ export function isConnectionDisposedError(error: unknown): boolean {
     message.includes("pending response rejected since connection got disposed") ||
     message.includes("connection got disposed") ||
     message.includes("ERR_STREAM_DESTROYED") ||
-    message.includes("Cannot call write after a stream was destroyed")
+    message.includes("Cannot call write after a stream was destroyed") ||
+    message.includes("Session not found:")
   );
 }
 

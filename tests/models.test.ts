@@ -12,7 +12,7 @@ describe("model config", () => {
     process.env.TELETOPAZ_DEFAULT_MODEL = originalDefaultModel;
   });
 
-  it("matches REF model inventory with ctcli and gmcli aliases", () => {
+  it("matches REF model inventory with ctcli, gmcli and cccli aliases", () => {
     const entries = modelConfig.getAllModels().map((item) => item.entry ?? `${item.provider}:${item.model}`);
 
     expect(entries).toEqual([
@@ -20,7 +20,9 @@ describe("model config", () => {
       "ctcli:gpt-5-mini",
       "ctcli:claude-opus-4.6",
       "ctcli:claude-sonnet-4.6",
-      "gmcli:gemini-3.1-pro-preview"
+      "gmcli:gemini-3.1-pro-preview",
+      "cccli:claude-opus-4.6",
+      "cccli:claude-sonnet-4.6"
     ]);
   });
 
