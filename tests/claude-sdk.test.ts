@@ -100,7 +100,7 @@ describe("ClaudeCodeSdkSession", () => {
     };
 
     expect(settings.permissions?.additionalDirectories).toEqual(
-      expect.arrayContaining(["~/.claude"])
+      expect.arrayContaining(["~/.claude", "/tmp/project"])
     );
     expect(settings.permissions?.allow).toEqual(
       expect.arrayContaining([
@@ -110,5 +110,28 @@ describe("ClaudeCodeSdkSession", () => {
         "Edit(~/.claude.json)"
       ])
     );
+  });
+
+  it("maps auto_edit approval mode to acceptEdits for the CLI", async () => {
+    const mockChild = createMockChildProcess();
+    vi.mocked(spawn).mockReturnValue(mockChild.child as ReturnType<typeof spawn>);
+    const session = new ClaudeCodeSdkSession({
+      model: "claude-sonnet-4.6",
+      approvalMode: "auto_edit",
+      workingDirectory: "/tmp/project"
+    });
+
+    const promise = (session as unknown as {
+      spawnClaudeCodeCli: (prompt: string, signal: AbortSignal) => Promise<string>;
+    }).spawnClaudeCodeCli("請直接修改設定", new AbortController().signal);
+
+    mockChild.emitClose(0);
+    await expect(promise).resolves.toBe("");
+
+    const args = vi.mocked(spawn).mock.calls.at(-1)?.[1];
+    expect(args).toEqual(expect.arrayContaining([
+      "--permission-mode",
+      "acceptEdits"
+    ]));
   });
 });

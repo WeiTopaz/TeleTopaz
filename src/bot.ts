@@ -96,6 +96,12 @@ type SendPromptResult = {
   recovered?: boolean;
 };
 
+function resolveApprovalMode(provider: ProviderType): "plan" | "auto_edit" | undefined {
+  if (provider === "gemini") return "plan";
+  if (provider === "claude-code") return "auto_edit";
+  return undefined;
+}
+
 /** Tool names that perform write or delete operations requiring human confirmation. */
 const WRITE_DELETE_TOOLS = new Set([
   // Copilot SDK tool names (stored lowercase for case-insensitive lookup)
@@ -1794,7 +1800,7 @@ export class TeleTopazService {
         memoryContext = await this.sessionMemory.buildContext({ chatId, workDir: canonicalCwd });
       } catch {}
       const systemPrompt = await buildPersonaPrompt(canonicalCwd, parsed.provider, memoryContext);
-      const approvalMode = (parsed.provider === "gemini" || parsed.provider === "claude-code") ? "plan" : undefined;
+      const approvalMode = resolveApprovalMode(parsed.provider);
 
       const tempSession = await tempClient.createSession({
         model: parsed.model,
@@ -1936,7 +1942,7 @@ export class TeleTopazService {
       const skillDirectories = state.provider === "copilot"
         ? await this.collectSkillDirectories(canonicalCwd)
         : undefined;
-      const approvalMode = (state.provider === "gemini" || state.provider === "claude-code") ? "plan" : undefined;
+      const approvalMode = resolveApprovalMode(state.provider);
 
       const models = await this.getModels(state.provider);
       const useModel = model ?? state.model ?? getDefaultModel(models);

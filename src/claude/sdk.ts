@@ -47,7 +47,7 @@ function toAbortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
 
-function buildClaudeHomeAccessSettings(): string {
+function buildClaudeHomeAccessSettings(workDir: string): string {
   return JSON.stringify({
     permissions: {
       allow: [
@@ -56,7 +56,7 @@ function buildClaudeHomeAccessSettings(): string {
         "Edit(~/.claude/**)",
         "Edit(~/.claude.json)"
       ],
-      additionalDirectories: ["~/.claude"]
+      additionalDirectories: ["~/.claude", workDir]
     }
   });
 }
@@ -216,7 +216,7 @@ export class ClaudeCodeSdkSession implements AiSession {
       const permissionMode = this.resolvePermissionMode();
       const cwd = this.options.workingDirectory || process.cwd();
       const claudeConfigDir = path.join(os.homedir(), ".claude");
-      const claudeSettings = buildClaudeHomeAccessSettings();
+      const claudeSettings = buildClaudeHomeAccessSettings(cwd);
 
       const args = [
         "-p",                               // print mode（非互動）
