@@ -1,7 +1,7 @@
 # 💎 TeleTopaz — 測試計畫
 
-> **版本**：0.4.0
-> **最後更新**：2026-03-18
+> **版本**：0.5.0
+> **最後更新**：2026-03-19
 > **測試框架**：Vitest 4.0.18
 > **參照文件**：[spec.md](../spec.md)
 
@@ -952,6 +952,7 @@ jobs:
 
 | 版本 | 日期 | 變更說明 |
 |------|------|----------|
+| 0.5.0 | 2026-03-19 | 補齊 13 組建議測試（T01–T13）；新增 `tls.test.ts`（12）、`telegram-api.test.ts`（13）、`quota.test.ts`（6）、`gemini-retry.test.ts`（5）、`images.test.ts`（5）、`emoji.test.ts`（6）、`app-data.test.ts`（6）、`redaction-recursive.test.ts`（12）、`bot-commands.test.ts`（9）、`bot-send-format.test.ts`（11）、`bot-image-handling.test.ts`（7）、`bot-shutdown.test.ts`（4）、`bot-event-dispatch.test.ts`（6）；總測試檔 35→48；總案例數 148→249 |
 | 0.4.0 | 2026-03-18 | 新增 `bot-silent-mode.test.ts`（18 案例）、`proactive-rebuild-notice.test.ts`（9 案例）、`claude-sdk.test.ts`（1 案例）；總測試檔 32→35；總案例數 138→148；核心 Bot 邏輯 12→14 檔；AI 供應商整合 4→5 檔；新增 PTY 模組與 `gemini/pty-session.ts` 覆蓋缺口說明；`claude/sdk.ts` 納入測試不足模組；`bot.ts` 覆蓋率估計提升至 80% |
 | 0.3.0 | 2026-03-15 | 新增 `bot-newproject.test.ts`（6 案例）；核心 Bot 邏輯 11→12 檔；總案例數 132→138；章節重新編號 |
 | 0.2.4 | 2026-03-14 | 新增靜默時段測試（`bot-session-resilience.test.ts` 3→4 案例）；總案例數 113→114 |
