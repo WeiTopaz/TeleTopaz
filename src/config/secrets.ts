@@ -54,15 +54,6 @@ async function loadRequiredSecret(
   return coerceOptionalString(await keytarLike.getPassword(SERVICE_NAME, REQUIRED_SECRET_KEYCHAIN_KEYS[key]));
 }
 
-async function loadLegacyRuntimeConfigFromKeychain(
-  keytarLike: Pick<KeytarLike, "getPassword">
-): Promise<RuntimeConfig> {
-  return {
-    directoryPatterns: coerceOptionalString(await keytarLike.getPassword(SERVICE_NAME, KEY_DIR_PATTERNS)),
-    certificateFingerprints: coerceOptionalString(await keytarLike.getPassword(SERVICE_NAME, KEY_CERT_FINGERPRINTS))
-  };
-}
-
 export async function loadConfiguredRuntimeConfig(
   options: Pick<LoadSecretsOptions, "env" | "keytar" | "runtimeConfig"> = {}
 ): Promise<RuntimeConfig> {
@@ -72,10 +63,29 @@ export async function loadConfiguredRuntimeConfig(
 
   const env = options.env ?? process.env;
   const keytarLike = options.keytar ?? keytar;
-  return loadRuntimeConfig({
-    env,
-    legacyConfigLoader: async () => loadLegacyRuntimeConfigFromKeychain(keytarLike)
-  });
+
+  // directoryPatterns: 優先環境變數，其次 keychain（主要來源，不存於檔案）
+  const keychainDirectoryPatterns = coerceOptionalString(
+    await keytarLike.getPassword(SERVICE_NAME, KEY_DIR_PATTERNS)
+  );
+  const directoryPatterns = coerceOptionalString(env.TELETOPAZ_DIRECTORY_PATTERNS) ?? keychainDirectoryPatterns;
+
+  // certificateFingerprints: 從 runtime-config.json 取（含環境變數覆寫）
+  const fileConfig = await loadRuntimeConfig({ env });
+
+  return {
+    directoryPatterns,
+    certificateFingerprints: fileConfig.certificateFingerprints
+  };
+}
+
+export async function saveDirectoryPatterns(
+  value: string | undefined,
+  keytarLike: Pick<KeytarLike, "setPassword"> = keytar
+): Promise<void> {
+  const normalized = coerceOptionalString(value);
+  if (!normalized) return;
+  await keytarLike.setPassword(SERVICE_NAME, KEY_DIR_PATTERNS, normalized);
 }
 
 export async function loadSecrets(options: LoadSecretsOptions = {}): Promise<SecretKeys> {

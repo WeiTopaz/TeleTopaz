@@ -1,5 +1,5 @@
 import readline from "node:readline";
-import { saveSecret } from "../src/config/secrets.js";
+import { saveSecret, saveDirectoryPatterns } from "../src/config/secrets.js";
 import { saveRuntimeConfig } from "../src/config/runtime-config.js";
 
 const ENV_KEYS = {
@@ -48,7 +48,8 @@ async function main(): Promise<void> {
   await saveSecret("botToken", botToken);
   await saveSecret("ownerChatId", ownerChatId);
   await saveSecret("ownerUserId", ownerUserId);
-  await saveRuntimeConfig({ directoryPatterns, certificateFingerprints });
+  await saveDirectoryPatterns(directoryPatterns);
+  await saveRuntimeConfig({ directoryPatterns: undefined, certificateFingerprints });
 
   console.log("Required secrets stored in keychain. Runtime settings stored in app data.");
 }
