@@ -22,7 +22,8 @@ describe("model config", () => {
       "ctcli:claude-sonnet-4.6",
       "gmcli:gemini-3.1-pro-preview",
       "cccli:claude-opus-4.6",
-      "cccli:claude-sonnet-4.6"
+      "cccli:claude-sonnet-4.6",
+      "cccli:claude-haiku-4.5"
     ]);
   });
 
@@ -35,6 +36,11 @@ describe("model config", () => {
     ]);
     await expect(modelConfig.loadSupportedModels("gemini")).resolves.toEqual([
       "gemini-3.1-pro-preview"
+    ]);
+    await expect(modelConfig.loadSupportedModels("claude-code")).resolves.toEqual([
+      "claude-opus-4.6",
+      "claude-sonnet-4.6",
+      "claude-haiku-4.5"
     ]);
   });
 

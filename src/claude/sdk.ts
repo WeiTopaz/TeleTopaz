@@ -78,7 +78,8 @@ export class ClaudeCodeSdkClient implements AiClient {
     return {
       models: [
         "claude-opus-4.6",
-        "claude-sonnet-4.6"
+        "claude-sonnet-4.6",
+        "claude-haiku-4.5"
       ],
       version: "Claude-Code-CLI"
     };

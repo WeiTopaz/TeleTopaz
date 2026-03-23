@@ -84,7 +84,7 @@ function isQuietHours(nowMs: number = Date.now()): boolean {
   return utc8Hour < 8;
 }
 
-const ROUTER_MODEL_PATTERN = /(?:^|[-.])(mini|flash|lite)(?:$|[-.])/i;
+const ROUTER_MODEL_PATTERN = /(?:^|[-.])(mini|flash|lite|haiku)(?:$|[-.])/i;
 
 type CreateSessionOptions = {
   announce?: boolean;

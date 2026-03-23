@@ -40,7 +40,8 @@ const SUPPORTED_MODELS: SupportedModel[] = [
   { provider: "copilot", cli: "ctcli", model: "claude-sonnet-4.6", entry: "ctcli:claude-sonnet-4.6" },
   { provider: "gemini", cli: "gmcli", model: DEFAULT_CORE_MODEL, entry: DEFAULT_MODEL_ENTRY },
   { provider: "claude-code", cli: "cccli", model: "claude-opus-4.6", entry: "cccli:claude-opus-4.6" },
-  { provider: "claude-code", cli: "cccli", model: "claude-sonnet-4.6", entry: "cccli:claude-sonnet-4.6" }
+  { provider: "claude-code", cli: "cccli", model: "claude-sonnet-4.6", entry: "cccli:claude-sonnet-4.6" },
+  { provider: "claude-code", cli: "cccli", model: "claude-haiku-4.5", entry: "cccli:claude-haiku-4.5" }
 ];
 
 const SUPPORTED_MODEL_ENTRIES = new Set(SUPPORTED_MODELS.map((item) => item.entry));
