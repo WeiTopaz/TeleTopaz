@@ -1375,7 +1375,7 @@ async classifyIntent(
 | 角色 | 預設模型 | 供應商 |
 |------|----------|--------|
 | Router | `gpt-5-mini` | Copilot |
-| Core | `gemini-3.1-pro-preview` | Gemini |
+| Core | `claude-sonnet-4.6` | Claude Code |
 
 ### 8.4 Router 模型篩選
 
@@ -2167,8 +2167,8 @@ function stripAttachmentContext(prompt: string): string
 | `CLI_TIMEOUT_MS` (Gemini) | 120,000 (2 分鐘) | Gemini CLI 呼叫逾時 |
 | `POLLING_ERROR_DEDUPE_WINDOW_MS` | 15,000 (15 秒) | 錯誤去重複時間窗口 |
 | `DEFAULT_ROUTER_MODEL` | `gpt-5-mini` | Auto Mode 預設 Router |
-| `DEFAULT_CORE_MODEL` | `gemini-3.1-pro-preview` | Auto Mode 預設 Core |
-| `DEFAULT_MODEL_ENTRY` | `gmcli:gemini-3.1-pro-preview` | 預設模型條目 |
+| `DEFAULT_CORE_MODEL` | `claude-sonnet-4.6` | Auto Mode 預設 Core |
+| `DEFAULT_MODEL_ENTRY` | `cccli:claude-sonnet-4.6` | 預設模型條目 |
 | `DEFAULT_MAX_ENTRIES` (記憶) | 24 | 持久化記憶最大筆數 |
 | `DEFAULT_MAX_CHARS` (記憶) | 400 | 每筆記憶最大字元數 |
 | `modelsTtlMs` | 300,000 (5 分鐘) | 模型快取 TTL |

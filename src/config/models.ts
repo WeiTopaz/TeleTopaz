@@ -12,8 +12,8 @@ export type SupportedModel = {
 };
 
 export const DEFAULT_ROUTER_MODEL = "gpt-5-mini";
-export const DEFAULT_CORE_MODEL = "gemini-3.1-pro-preview";
-export const DEFAULT_MODEL_ENTRY = `gmcli:${DEFAULT_CORE_MODEL}` as const;
+export const DEFAULT_CORE_MODEL = "claude-sonnet-4.6";
+export const DEFAULT_MODEL_ENTRY = `cccli:${DEFAULT_CORE_MODEL}` as const;
 
 const PROVIDER_TO_CLI: Record<ProviderType, CliProviderLabel> = {
   copilot: "ctcli",
@@ -38,7 +38,7 @@ const SUPPORTED_MODELS: SupportedModel[] = [
   { provider: "copilot", cli: "ctcli", model: "gpt-5-mini", entry: "ctcli:gpt-5-mini" },
   { provider: "copilot", cli: "ctcli", model: "claude-opus-4.6", entry: "ctcli:claude-opus-4.6" },
   { provider: "copilot", cli: "ctcli", model: "claude-sonnet-4.6", entry: "ctcli:claude-sonnet-4.6" },
-  { provider: "gemini", cli: "gmcli", model: DEFAULT_CORE_MODEL, entry: DEFAULT_MODEL_ENTRY },
+  { provider: "gemini", cli: "gmcli", model: "gemini-3.1-pro-preview", entry: "gmcli:gemini-3.1-pro-preview" },
   { provider: "claude-code", cli: "cccli", model: "claude-opus-4.6", entry: "cccli:claude-opus-4.6" },
   { provider: "claude-code", cli: "cccli", model: "claude-sonnet-4.6", entry: "cccli:claude-sonnet-4.6" },
   { provider: "claude-code", cli: "cccli", model: "claude-haiku-4.5", entry: "cccli:claude-haiku-4.5" }
