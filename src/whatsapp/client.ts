@@ -21,6 +21,8 @@ import { randomBytes } from "node:crypto";
 export interface WaMessage {
   id: string;
   from: string;
+  /** In groups, the JID of the actual sender. */
+  participant?: string;
   content: string;
   timestamp: number;
   isGroup: boolean;
@@ -65,12 +67,13 @@ export class WhatsAppClient {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        // Dynamic import — qrcode-terminal is optional and has no TS types
+        // qrcode-terminal's generate() uses `this.error` internally, so we must
+        // call it on the module object to preserve the correct `this` context.
         const qrMod = await import("qrcode-terminal").catch(() => null) as any;
-        const gen = qrMod?.default?.generate ?? qrMod?.generate;
-        if (gen) {
-          console.log("\n📱 掃描 QR Code 連接 WhatsApp（連結裝置）:\n");
-          gen(qr, { small: true });
+        const mod = qrMod?.default ?? qrMod;
+        if (mod?.generate) {
+          console.log("\n📱 請用手機 WhatsApp 掃描 QR Code（設定 → 連結裝置）:\n");
+          mod.generate(qr, { small: true });
         }
       }
 
@@ -86,15 +89,37 @@ export class WhatsAppClient {
         }
       } else if (connection === "open") {
         this.options.onStatus("connected");
+        const rawId = this.sock.user?.id ?? "";
+        const phone = rawId.split(":")[0]?.split("@")[0] ?? rawId;
+        if (phone) {
+          console.log(`\n✅ WhatsApp 連線成功！`);
+          console.log(`📞 帳號號碼：${phone}`);
+          console.log(`💡 請將 TELETOPAZ_WA_OWNER_JIDS 設定為：${phone}`);
+          console.log(`   → 在 WhatsApp 開啟「傳訊息給自己」即可開始使用\n`);
+        }
       }
     });
 
     this.sock.ev.on("creds.update", saveCreds);
 
     this.sock.ev.on("messages.upsert", async ({ messages, type }: { messages: any[]; type: string }) => {
+      console.log("[WA-DEBUG] upsert", JSON.stringify({ type, count: messages.length }));
       if (type !== "notify") return;
       for (const msg of messages) {
-        if (msg.key.fromMe || msg.key.remoteJid === "status@broadcast") continue;
+        // Detect self-chat: match both phone JID (@s.whatsapp.net) and LID (@lid).
+        const rawOwnId = this.sock.user?.id ?? "";
+        const ownJid = rawOwnId.includes(":") ? rawOwnId.replace(/:.*@/, "@") : rawOwnId;
+        const ownLid: string = (this.sock.user as any)?.lid ?? "";
+        const remoteJid = msg.key.remoteJid ?? "";
+        const isGroup = remoteJid.endsWith("@g.us");
+        const isSelfChat = msg.key.fromMe && (
+          (!!ownJid && remoteJid === ownJid) ||
+          (!!ownLid && remoteJid === ownLid) ||
+          remoteJid.endsWith("@lid")
+        );
+        // Allow: self-chat, group messages from own account, and incoming DMs.
+        const isGroupFromSelf = isGroup && msg.key.fromMe;
+        if ((!isSelfChat && !isGroupFromSelf && msg.key.fromMe) || remoteJid === "status@broadcast") continue;
 
         const unwrapped = baileysExtractMessageContent(msg.message);
         if (!unwrapped) continue;
@@ -120,9 +145,10 @@ export class WhatsAppClient {
         this.options.onMessage({
           id: msg.key.id ?? "",
           from,
+          ...(msg.key.participant ? { participant: msg.key.participant } : {}),
           content,
           timestamp: msg.messageTimestamp as number,
-          isGroup: from.endsWith("@g.us"),
+          isGroup,
           ...(mediaPaths.length > 0 ? { mediaPaths } : {}),
         });
       }

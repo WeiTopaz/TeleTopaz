@@ -21,7 +21,7 @@ import { GeminiSdkClient } from "../gemini/sdk.js";
 import { GeminiPtyClient } from "../gemini/pty-session.js";
 import { SessionMemoryStore } from "../session/memory-store.js";
 import { buildPersonaPrompt } from "../session/persona.js";
-import { loadConfiguredRuntimeConfig } from "../config/secrets.js";
+import { loadConfiguredRuntimeConfig, loadWaOwnerJids } from "../config/secrets.js";
 import { loadDirectoryPatterns, expandDirectoryPatterns } from "../config/directories.js";
 import { DEFAULT_MODEL_ENTRY, parseModelEntry } from "../config/models.js";
 import { logger } from "../util/logger.js";
@@ -119,7 +119,9 @@ export class WhatsAppService {
    * Returns null if TELETOPAZ_WA_OWNER_JIDS is not set (WhatsApp disabled).
    */
   static async create(): Promise<WhatsAppService | null> {
-    const raw = process.env["TELETOPAZ_WA_OWNER_JIDS"];
+    const raw =
+      process.env["TELETOPAZ_WA_OWNER_JIDS"] ??
+      (await loadWaOwnerJids().catch(() => undefined));
     if (!raw?.trim()) return null;
 
     const ownerJids = raw.split(",").map((j) => j.trim()).filter(Boolean);
@@ -164,12 +166,18 @@ export class WhatsAppService {
   // ─── Message routing ──────────────────────────────────────────────────────
 
   private isOwner(jid: string): boolean {
+    // Self-chat via LID: client.ts already verified fromMe=true, so trust @lid JIDs.
+    if (jid.endsWith("@lid")) return true;
     const phone = jid.split("@")[0] ?? jid;
     return this.ownerPhones.has(phone) || this.ownerPhones.has(jid);
   }
 
   private async handleMessage(msg: WaMessage): Promise<void> {
-    if (!this.isOwner(msg.from) || msg.isGroup) return;
+    // For groups, verify the sender (participant) is an owner.
+    const senderJid = msg.isGroup ? (msg.participant ?? "") : msg.from;
+    const ownerCheck = this.isOwner(senderJid);
+    logger.info("WA message received", { from: msg.from, sender: senderJid, isOwner: ownerCheck, isGroup: msg.isGroup, content: msg.content.slice(0, 50) });
+    if (!ownerCheck) return;
     const text = msg.content.trim();
     if (!text) return;
 
@@ -385,6 +393,7 @@ export class WhatsAppService {
   }
 
   private async send(jid: string, text: string): Promise<void> {
-    await this.wa.sendMessage(jid, text).catch((err: unknown) => logger.warn("WA send failed", err));
+    logger.info("WA sending", { jid, text: text.slice(0, 80) });
+    await this.wa.sendMessage(jid, text).catch((err: unknown) => logger.error("WA send failed", { jid, err: String(err) }));
   }
 }

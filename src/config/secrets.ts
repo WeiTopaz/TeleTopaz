@@ -15,6 +15,7 @@ const KEY_OWNER_CHAT_ID = "owner_chat_id";
 const KEY_OWNER_USER_ID = "owner_user_id";
 const KEY_DIR_PATTERNS = "directory_patterns";
 const KEY_CERT_FINGERPRINTS = "certificate_fingerprints";
+const KEY_WA_OWNER_JIDS = "wa_owner_jids";
 
 type KeytarLike = Pick<typeof keytar, "getPassword" | "setPassword">;
 
@@ -127,6 +128,21 @@ export async function saveSecret(key: RequiredSecretKey, value: string): Promise
   }
 
   await keytar.setPassword(SERVICE_NAME, map[key], normalizedValue);
+}
+
+export async function saveWaOwnerJids(
+  value: string | undefined,
+  keytarLike: Pick<KeytarLike, "setPassword"> = keytar
+): Promise<void> {
+  const normalized = coerceOptionalString(value);
+  if (!normalized) return;
+  await keytarLike.setPassword(SERVICE_NAME, KEY_WA_OWNER_JIDS, normalized);
+}
+
+export async function loadWaOwnerJids(
+  keytarLike: Pick<KeytarLike, "getPassword"> = keytar
+): Promise<string | undefined> {
+  return coerceOptionalString(await keytarLike.getPassword(SERVICE_NAME, KEY_WA_OWNER_JIDS));
 }
 
 export function getSecretServiceName(): string {
