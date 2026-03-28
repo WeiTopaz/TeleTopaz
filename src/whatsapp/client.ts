@@ -18,6 +18,17 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
+export interface WaMediaItem {
+  path: string;
+  mime: string;
+}
+
+export interface WaMessageKey {
+  id: string;
+  remoteJid: string;
+  fromMe: boolean;
+}
+
 export interface WaMessage {
   id: string;
   from: string;
@@ -26,7 +37,8 @@ export interface WaMessage {
   content: string;
   timestamp: number;
   isGroup: boolean;
-  mediaPaths?: string[];
+  mediaItems?: WaMediaItem[];
+  messageKey: WaMessageKey;
 }
 
 export interface WhatsAppClientOptions {
@@ -103,7 +115,6 @@ export class WhatsAppClient {
     this.sock.ev.on("creds.update", saveCreds);
 
     this.sock.ev.on("messages.upsert", async ({ messages, type }: { messages: any[]; type: string }) => {
-      console.log("[WA-DEBUG] upsert", JSON.stringify({ type, count: messages.length }));
       if (type !== "notify") return;
       for (const msg of messages) {
         // Detect self-chat: match both phone JID (@s.whatsapp.net) and LID (@lid).
@@ -125,23 +136,28 @@ export class WhatsAppClient {
         if (!unwrapped) continue;
 
         const content = this.getTextContent(unwrapped) ?? "";
-        const mediaPaths: string[] = [];
+        const mediaItems: WaMediaItem[] = [];
 
         if (unwrapped.imageMessage) {
-          const p = await this.downloadMedia(msg, unwrapped.imageMessage.mimetype ?? undefined);
-          if (p) mediaPaths.push(p);
+          const p = await this.downloadMedia(msg, unwrapped.imageMessage.mimetype ?? "image/jpeg");
+          if (p) mediaItems.push(p);
         } else if (unwrapped.documentMessage) {
           const p = await this.downloadMedia(
             msg,
-            unwrapped.documentMessage.mimetype ?? undefined,
+            unwrapped.documentMessage.mimetype ?? "application/octet-stream",
             unwrapped.documentMessage.fileName ?? undefined,
           );
-          if (p) mediaPaths.push(p);
+          if (p) mediaItems.push(p);
         }
 
-        if (!content && mediaPaths.length === 0) continue;
+        if (!content && mediaItems.length === 0) continue;
 
-        const from = msg.key.remoteJid ?? "";
+        const msgKey: WaMessageKey = {
+          id: msg.key.id ?? "",
+          remoteJid,
+          fromMe: msg.key.fromMe ?? false,
+        };
+        const from = remoteJid;
         this.options.onMessage({
           id: msg.key.id ?? "",
           from,
@@ -149,23 +165,25 @@ export class WhatsAppClient {
           content,
           timestamp: msg.messageTimestamp as number,
           isGroup,
-          ...(mediaPaths.length > 0 ? { mediaPaths } : {}),
+          ...(mediaItems.length > 0 ? { mediaItems } : {}),
+          messageKey: msgKey,
         });
       }
     });
   }
 
-  private async downloadMedia(msg: any, mimetype?: string, fileName?: string): Promise<string | null> {
+  private async downloadMedia(msg: any, mime: string, fileName?: string): Promise<WaMediaItem | null> {
     try {
       const dir = join(this.options.authDir, "..", "wa-media");
       await mkdir(dir, { recursive: true });
       const buf = await downloadMediaMessage(msg, "buffer", {}) as Buffer;
-      const ext = "." + ((mimetype ?? "application/octet-stream").split("/").pop()?.split(";")[0] ?? "bin");
+      const ext = "." + (mime.split("/").pop()?.split(";")[0] ?? "bin");
       const name = fileName
         ? `wa_${Date.now()}_${randomBytes(4).toString("hex")}_${fileName}`
         : `wa_${Date.now()}_${randomBytes(4).toString("hex")}${ext}`;
-      await writeFile(join(dir, name), buf);
-      return join(dir, name);
+      const filePath = join(dir, name);
+      await writeFile(filePath, buf);
+      return { path: filePath, mime };
     } catch {
       return null;
     }
@@ -182,9 +200,54 @@ export class WhatsAppClient {
     );
   }
 
-  async sendMessage(to: string, text: string): Promise<void> {
+  async sendMessage(to: string, text: string): Promise<WaMessageKey | null> {
     if (!this.sock) throw new Error("Not connected");
-    await this.sock.sendMessage(to, { text });
+    const result = await this.sock.sendMessage(to, { text });
+    const key = result?.key;
+    if (!key?.id || !key.remoteJid) return null;
+    return { id: key.id, remoteJid: key.remoteJid, fromMe: key.fromMe ?? true };
+  }
+
+  async sendImage(to: string, imageBuffer: Buffer, caption?: string): Promise<WaMessageKey | null> {
+    if (!this.sock) return null;
+    const result = await this.sock.sendMessage(to, {
+      image: imageBuffer,
+      ...(caption ? { caption } : {}),
+    }).catch(() => null);
+    const key = result?.key;
+    if (!key?.id || !key.remoteJid) return null;
+    return { id: key.id, remoteJid: key.remoteJid, fromMe: key.fromMe ?? true };
+  }
+
+  async sendDocument(
+    to: string,
+    buffer: Buffer,
+    filename: string,
+    mimetype: string,
+    caption?: string,
+  ): Promise<WaMessageKey | null> {
+    if (!this.sock) return null;
+    const result = await this.sock.sendMessage(to, {
+      document: buffer,
+      mimetype,
+      fileName: filename,
+      ...(caption ? { caption } : {}),
+    }).catch(() => null);
+    const key = result?.key;
+    if (!key?.id || !key.remoteJid) return null;
+    return { id: key.id, remoteJid: key.remoteJid, fromMe: key.fromMe ?? true };
+  }
+
+  async sendPresenceUpdate(jid: string, status: "composing" | "paused" | "available"): Promise<void> {
+    if (!this.sock) return;
+    await this.sock.sendPresenceUpdate(status, jid).catch(() => undefined);
+  }
+
+  async sendReaction(jid: string, msgKey: WaMessageKey, emoji: string): Promise<void> {
+    if (!this.sock) return;
+    await this.sock.sendMessage(jid, {
+      react: { text: emoji, key: msgKey },
+    }).catch(() => undefined);
   }
 
   async disconnect(): Promise<void> {
