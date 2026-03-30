@@ -56,5 +56,7 @@ AGENTS.md
 memory/
 directories.json
 .teletopaz/
+.docs/
+.worktrees/
 .plan/
 .debug/
