@@ -23,7 +23,12 @@ export async function expandDirectoryPatterns(patterns: string[]): Promise<strin
     const patternRoot = resolvePatternRoot(normalized);
     if (!patternRoot) continue;
     const canonicalPatternRoot = await canonicalizeDirectory(patternRoot);
-    const matches = await fg(normalized, { dot: false, onlyDirectories: true, unique: true });
+    let matches: string[];
+    try {
+      matches = await fg(normalized, { dot: false, onlyDirectories: true, unique: true });
+    } catch {
+      continue;
+    }
     for (const match of matches) {
       const trimmed = match.replace(/\/+$/, "");
       try {

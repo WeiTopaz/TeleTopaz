@@ -72,11 +72,14 @@ describe("TeleTopazService session memory", () => {
     const client = createClient(session);
     const service = new TeleTopazService(api, "1", "1", 0);
 
+    const builtinSkillsPath = path.resolve(".github/skills");
+    const workspaceSkillsPath = "/tmp/project/.github/skills";
+
     (service as unknown as { loadAllowedDirectories: () => Promise<string[]> }).loadAllowedDirectories = vi.fn().mockResolvedValue(["/tmp/project"]);
     (service as unknown as { getModels: () => Promise<string[]> }).getModels = vi.fn().mockResolvedValue(["gpt-5-mini"]);
     (service as unknown as { createProviderClient: () => AiClient }).createProviderClient = vi.fn().mockReturnValue(client);
     (service as unknown as { safeSend: () => Promise<undefined> }).safeSend = vi.fn().mockResolvedValue(undefined);
-    (service as unknown as { findSkillsPath: (cwd: string) => Promise<string | undefined> }).findSkillsPath = vi.fn().mockResolvedValue("/tmp/project/.github/skills");
+    (service as unknown as { collectSkillDirectories: (cwd: string) => Promise<string[]> }).collectSkillDirectories = vi.fn().mockResolvedValue([builtinSkillsPath, workspaceSkillsPath]);
     (service as unknown as { sessionMemory: { buildContext: (scope: unknown) => Promise<string | undefined> } }).sessionMemory = {
       buildContext: vi.fn().mockResolvedValue(undefined)
     };
@@ -88,10 +91,7 @@ describe("TeleTopazService session memory", () => {
     expect(client.createSession).toHaveBeenCalledOnce();
     const options = vi.mocked(client.createSession).mock.calls[0]?.[0];
     expect(options?.skillDirectories).toEqual(
-      expect.arrayContaining([
-        path.resolve(".github/skills"),
-        "/tmp/project/.github/skills"
-      ])
+      expect.arrayContaining([builtinSkillsPath, workspaceSkillsPath])
     );
   });
 
@@ -126,6 +126,75 @@ describe("TeleTopazService session memory", () => {
     expect(client.createSession).toHaveBeenCalledOnce();
     const options = vi.mocked(client.createSession).mock.calls[0]?.[0] as { approvalMode?: string } | undefined;
     expect(options?.approvalMode).toBe("plan");
+  });
+
+  it("uses auto_edit mode for Claude Code sessions", async () => {
+    const api = createApi();
+    const session: AiSession = {
+      onEvent: vi.fn(),
+      send: vi.fn().mockResolvedValue(undefined),
+      sendAndWait: vi.fn().mockResolvedValue(undefined),
+      destroy: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined)
+    };
+    const client = createClient(session);
+    const service = new TeleTopazService(api, "1", "1", 0);
+    const state = (service as unknown as {
+      getOrCreateState: (chatId: number) => Record<string, unknown>;
+    }).getOrCreateState(1);
+    state.provider = "claude-code";
+
+    (service as unknown as { loadAllowedDirectories: () => Promise<string[]> }).loadAllowedDirectories = vi.fn().mockResolvedValue(["/tmp/project"]);
+    (service as unknown as { getModels: () => Promise<string[]> }).getModels = vi.fn().mockResolvedValue(["claude-opus-4.6"]);
+    (service as unknown as { createProviderClient: () => AiClient }).createProviderClient = vi.fn().mockReturnValue(client);
+    (service as unknown as { safeSend: () => Promise<undefined> }).safeSend = vi.fn().mockResolvedValue(undefined);
+    (service as unknown as { sessionMemory: { buildContext: (scope: unknown) => Promise<string | undefined> } }).sessionMemory = {
+      buildContext: vi.fn().mockResolvedValue(undefined)
+    };
+
+    await (service as unknown as {
+      createSession: (chatId: number, cwd: string, model?: string) => Promise<void>;
+    }).createSession(1, "/tmp/project", "claude-opus-4.6");
+
+    expect(client.createSession).toHaveBeenCalledOnce();
+    const options = vi.mocked(client.createSession).mock.calls[0]?.[0] as { approvalMode?: string } | undefined;
+    expect(options?.approvalMode).toBe("auto_edit");
+  });
+
+  it("uses auto_edit mode for Claude Code router sessions", async () => {
+    const api = createApi();
+    const tempSession: AiSession = {
+      onEvent: vi.fn(),
+      send: vi.fn().mockResolvedValue(undefined),
+      sendAndWait: vi.fn().mockResolvedValue(undefined),
+      destroy: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined)
+    };
+    const client = createClient(tempSession);
+    const service = new TeleTopazService(api, "1", "1", 0);
+    const state = (service as unknown as {
+      getOrCreateState: (chatId: number) => Record<string, unknown>;
+    }).getOrCreateState(1);
+
+    state.workDir = "/tmp/project";
+    state.routerModel = "cccli:claude-opus-4.6";
+    state.provider = "copilot";
+    state.model = "gpt-5-mini";
+
+    (service as unknown as { createProviderClient: () => AiClient }).createProviderClient = vi.fn().mockReturnValue(client);
+    (service as unknown as { safeSend: () => Promise<undefined> }).safeSend = vi.fn().mockResolvedValue(undefined);
+    (service as unknown as { sendPreparedPrompt: () => Promise<void> }).sendPreparedPrompt = vi.fn().mockResolvedValue(undefined);
+    (service as unknown as { sessionMemory: { buildContext: (scope: unknown) => Promise<string | undefined> } }).sessionMemory = {
+      buildContext: vi.fn().mockResolvedValue(undefined)
+    };
+
+    await (service as unknown as {
+      handleRouterCommand: (chatId: number, prompt: string) => Promise<void>;
+    }).handleRouterCommand(1, "請幫我修正設定");
+
+    expect(client.createSession).toHaveBeenCalledOnce();
+    const options = vi.mocked(client.createSession).mock.calls[0]?.[0] as { approvalMode?: string } | undefined;
+    expect(options?.approvalMode).toBe("auto_edit");
   });
 
   it("rejects workspace skills that resolve outside the selected workspace", async () => {

@@ -106,7 +106,10 @@ describe("TeleTopazService model display", () => {
         "ctcli:gpt-5-mini",
         "ctcli:claude-opus-4.6",
         "ctcli:claude-sonnet-4.6",
-        "gmcli:gemini-3.1-pro-preview"
+        "gmcli:gemini-3.1-pro-preview",
+        "cccli:claude-opus-4.6",
+        "cccli:claude-sonnet-4.6",
+        "cccli:claude-haiku-4.5"
       ])
     );
     expect(labels.join("\n")).not.toContain("gpt-5.2-codex");
@@ -125,6 +128,7 @@ describe("TeleTopazService model display", () => {
     const routerKeyboard = extractKeyboard(safeSend.mock.calls[0]);
     const routerLabels = routerKeyboard.inline_keyboard.flat().map((button) => button.text);
     expect(routerLabels.join("\n")).toContain("ctcli:gpt-5-mini");
+    expect(routerLabels.join("\n")).toContain("cccli:claude-haiku-4.5");
     expect(routerLabels.join("\n")).not.toContain("gmcli:gemini-3.1-pro-preview");
 
     safeSend.mockClear();

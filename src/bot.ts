@@ -14,9 +14,7 @@ import { formatChatDisplayName, formatJsonResult, parseIndex } from "./util/form
 import { logger } from "./util/logger.js";
 import { parseFingerprints } from "./util/tls.js";
 import { CopilotSdkClient, normalizeModelInfos } from "./copilot/sdk.js";
-import { GeminiSdkClient } from "./gemini/sdk.js";
-import { GeminiPtyClient } from "./gemini/pty-session.js";
-import { ClaudeCodeSdkClient } from "./claude/sdk.js";
+import { createProviderClient } from "./provider/factory.js";
 import { quotaService } from "./services/quota.js";
 import type {
   AiAttachment,
@@ -84,7 +82,7 @@ function isQuietHours(nowMs: number = Date.now()): boolean {
   return utc8Hour < 8;
 }
 
-const ROUTER_MODEL_PATTERN = /(?:^|[-.])(mini|flash|lite)(?:$|[-.])/i;
+const ROUTER_MODEL_PATTERN = /(?:^|[-.])(mini|flash|lite|haiku)(?:$|[-.])/i;
 
 type CreateSessionOptions = {
   announce?: boolean;
@@ -95,6 +93,12 @@ type SendPromptResult = {
   totalChunks: number;
   recovered?: boolean;
 };
+
+function resolveApprovalMode(provider: ProviderType): "plan" | "auto_edit" | undefined {
+  if (provider === "gemini") return "plan";
+  if (provider === "claude-code") return "auto_edit";
+  return undefined;
+}
 
 /** Tool names that perform write or delete operations requiring human confirmation. */
 const WRITE_DELETE_TOOLS = new Set([
@@ -1794,7 +1798,7 @@ export class TeleTopazService {
         memoryContext = await this.sessionMemory.buildContext({ chatId, workDir: canonicalCwd });
       } catch {}
       const systemPrompt = await buildPersonaPrompt(canonicalCwd, parsed.provider, memoryContext);
-      const approvalMode = (parsed.provider === "gemini" || parsed.provider === "claude-code") ? "plan" : undefined;
+      const approvalMode = resolveApprovalMode(parsed.provider);
 
       const tempSession = await tempClient.createSession({
         model: parsed.model,
@@ -1936,7 +1940,7 @@ export class TeleTopazService {
       const skillDirectories = state.provider === "copilot"
         ? await this.collectSkillDirectories(canonicalCwd)
         : undefined;
-      const approvalMode = (state.provider === "gemini" || state.provider === "claude-code") ? "plan" : undefined;
+      const approvalMode = resolveApprovalMode(state.provider);
 
       const models = await this.getModels(state.provider);
       const useModel = model ?? state.model ?? getDefaultModel(models);
@@ -2721,16 +2725,7 @@ export class TeleTopazService {
   }
 
   private createProviderClient(provider: ProviderType): AiClient {
-    if (provider === "gemini") {
-      if (process.env.TELETOPAZ_USE_PTY === "1") {
-        return new GeminiPtyClient();
-      }
-      return new GeminiSdkClient();
-    }
-    if (provider === "claude-code") {
-      return new ClaudeCodeSdkClient();
-    }
-    return new CopilotSdkClient();
+    return createProviderClient(provider);
   }
 
   private resolveProviderForModel(model: string): ProviderType {

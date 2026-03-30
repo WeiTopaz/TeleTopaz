@@ -43,6 +43,7 @@ const SENSITIVE_READ_PATHS = [
 
 export function buildSandboxProfile(options?: SandboxProfileOptions): string {
   const home = os.homedir();
+  const uid = os.userInfo().uid;
   const appDataDir = resolveAppDataDir();
 
   const projectWriteRoots = options?.directoryPatterns?.length
@@ -78,6 +79,8 @@ export function buildSandboxProfile(options?: SandboxProfileOptions): string {
     "; Allow normal macOS temp/cache paths used by processes",
     "(allow file-write* (subpath \"/private/var/folders\"))",
     "(allow file-write* (subpath \"/var/folders\"))",
+    `(allow file-write* (subpath "/private/tmp/claude-${uid}"))`,
+    `(allow file-write* (subpath "/tmp/claude-${uid}"))`,
     `(allow file-write* (subpath "${appDataDir}"))`,
     "",
     "; Allow macOS Keychain writes (so 'Always Allow' ACL updates persist)",
@@ -91,6 +94,7 @@ export function buildSandboxProfile(options?: SandboxProfileOptions): string {
     `(allow file-write* (subpath "${home}/.gemini"))`,
     `(allow file-write* (subpath "${home}/.claude"))`,
     `(allow file-write* (literal "${home}/.claude.json"))`,
+    `(allow file-write* (subpath "${home}/Library/Application Support/Claude"))`,
     "",
     "; Allow /dev/null for child processes like git",
     "(allow file-read* (subpath \"/dev/null\"))",

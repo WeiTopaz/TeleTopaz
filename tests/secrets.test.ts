@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadSecrets } from "../src/config/secrets.js";
+import { loadSecrets, loadConfiguredRuntimeConfig } from "../src/config/secrets.js";
 
 describe("loadSecrets", () => {
-  it("reads only required secrets from keychain and takes optional startup settings from runtime config", async () => {
+  it("uses injected runtimeConfig directly without reading keychain for directory patterns", async () => {
     const getPassword = vi.fn(async (_service: string, account: string) => {
       switch (account) {
         case "bot_token":
@@ -32,9 +32,8 @@ describe("loadSecrets", () => {
       directoryPatterns: "/Users/test/Project/*",
       certificateFingerprints: "sha256/runtime"
     });
+    // runtimeConfig 直接注入時，keychain 僅被呼叫 3 次（三個必要 secrets）
     expect(getPassword).toHaveBeenCalledTimes(3);
-    expect(getPassword).not.toHaveBeenCalledWith("teletopaz", "directory_patterns");
-    expect(getPassword).not.toHaveBeenCalledWith("teletopaz", "certificate_fingerprints");
   });
 
   it("prefers environment variables before keychain for required secrets", async () => {
@@ -57,5 +56,38 @@ describe("loadSecrets", () => {
     expect(secrets.ownerChatId).toBe("42");
     expect(secrets.ownerUserId).toBe("99");
     expect(getPassword).not.toHaveBeenCalled();
+  });
+});
+
+describe("loadConfiguredRuntimeConfig", () => {
+  it("reads directoryPatterns from keychain as primary source", async () => {
+    const getPassword = vi.fn(async (_service: string, account: string) => {
+      if (account === "directory_patterns") return "/Users/test/Keychain/*";
+      return null;
+    });
+
+    const config = await loadConfiguredRuntimeConfig({
+      env: {} as NodeJS.ProcessEnv,
+      keytar: { getPassword },
+      runtimeConfig: undefined
+    });
+
+    expect(config.directoryPatterns).toBe("/Users/test/Keychain/*");
+    expect(getPassword).toHaveBeenCalledWith("teletopaz", "directory_patterns");
+  });
+
+  it("prefers TELETOPAZ_DIRECTORY_PATTERNS env var over keychain", async () => {
+    const getPassword = vi.fn(async (_service: string, account: string) => {
+      if (account === "directory_patterns") return "/Users/test/Keychain/*";
+      return null;
+    });
+
+    const config = await loadConfiguredRuntimeConfig({
+      env: { TELETOPAZ_DIRECTORY_PATTERNS: "/Users/test/Env/*" } as NodeJS.ProcessEnv,
+      keytar: { getPassword },
+      runtimeConfig: undefined
+    });
+
+    expect(config.directoryPatterns).toBe("/Users/test/Env/*");
   });
 });

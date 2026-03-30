@@ -15,6 +15,7 @@ describe("sandbox profile", () => {
 
   it("builds profile with dynamic home paths and PTY access", () => {
     const home = os.homedir();
+    const uid = os.userInfo().uid;
     const profile = buildSandboxProfile({ workDir: "/tmp/test-project" });
     expect(profile).toContain("(version 1)");
     expect(profile).toContain("(allow default)");
@@ -26,6 +27,8 @@ describe("sandbox profile", () => {
     expect(profile).toContain("(allow file-write* (subpath \"/tmp/test-project\"))");
     expect(profile).toContain("(allow file-write* (subpath \"/private/var/folders\"))");
     expect(profile).toContain("(allow file-write* (subpath \"/var/folders\"))");
+    expect(profile).toContain(`(allow file-write* (subpath "/private/tmp/claude-${uid}"))`);
+    expect(profile).toContain(`(allow file-write* (subpath "/tmp/claude-${uid}"))`);
     expect(profile).toContain(`(allow file-write* (subpath "${home}/.teletopaz"))`);
     expect(profile).toContain(`(allow file-write* (subpath "${home}/Library/Application Support/GitHub Copilot"))`);
     expect(profile).toContain(`(allow file-write* (subpath "${home}/.config/github-copilot"))`);
@@ -33,6 +36,7 @@ describe("sandbox profile", () => {
     expect(profile).toContain(`(allow file-write* (subpath "${home}/.codex"))`);
     expect(profile).toContain(`(allow file-write* (subpath "${home}/.claude"))`);
     expect(profile).toContain(`(allow file-write* (literal "${home}/.claude.json"))`);
+    expect(profile).toContain(`(allow file-write* (subpath "${home}/Library/Application Support/Claude"))`);
     expect(profile).toContain("(allow file-read* (subpath \"/dev/ptmx\"))");
     expect(profile).toContain("(allow file-write* (subpath \"/dev/ptmx\"))");
     expect(profile).toContain("(allow file-read* (subpath \"/dev/pts\"))");
