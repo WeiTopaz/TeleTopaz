@@ -1,9 +1,7 @@
-import type { AiAttachment, AiClient, AiSession, AiEvent, ProviderType } from "../provider/types.js";
+import type { AiAttachment, AiEvent } from "../provider/types.js";
+import type { BaseSessionState, BasePendingTask } from "./base-state.js";
 
-export type PendingTask = {
-  prompt: string;
-  queuedAt: number;
-};
+export type PendingTask = BasePendingTask;
 
 export type Attachment = {
   dataUrl: string;
@@ -28,18 +26,11 @@ export type PendingRecovery = {
   createdAt: number;
 };
 
-export type AgentContext = {
+export interface AgentContext extends BaseSessionState {
+  // Telegram-specific identity
   chatId: number;
-  provider: ProviderType;
-  client: AiClient | undefined;
-  session: AiSession | undefined;
-  workDir: string | undefined;
-  model: string | undefined;
-  mode: "manual" | "auto";
-  routerModel: string | undefined;
-  coreModel: string | undefined;
-  processing: boolean;
-  pendingTasks: PendingTask[];
+
+  // Telegram-specific processing state
   resetting: boolean;
   attachments: Attachment[];
   sessionIcon: string;
@@ -55,9 +46,6 @@ export type AgentContext = {
   receivedAssistantMessage: boolean;
   lastAssistantMessageHash: string | undefined;
   lastAssistantMessageText: string | undefined;
-  promptCycles: number;
-  sessionCreatedAt: number | undefined;
-  sessionLastActivityAt: number | undefined;
   pendingRecovery: PendingRecovery | undefined;
   lastProactiveRebuildNotice: {
     messageId: number;
@@ -67,8 +55,9 @@ export type AgentContext = {
   cachedDirs: string[];
   personaLoaded: boolean;
   reactionEmojis: string[] | null;
-  allowAll: boolean;
-  silentMode: boolean;
   silentAnchorMessageId: number | undefined;
   sessionVersion: number;
-};
+
+  // Narrowed from BaseSessionState
+  pendingTasks: PendingTask[];
+}

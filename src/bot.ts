@@ -14,9 +14,7 @@ import { formatChatDisplayName, formatJsonResult, parseIndex } from "./util/form
 import { logger } from "./util/logger.js";
 import { parseFingerprints } from "./util/tls.js";
 import { CopilotSdkClient, normalizeModelInfos } from "./copilot/sdk.js";
-import { GeminiSdkClient } from "./gemini/sdk.js";
-import { GeminiPtyClient } from "./gemini/pty-session.js";
-import { ClaudeCodeSdkClient } from "./claude/sdk.js";
+import { createProviderClient } from "./provider/factory.js";
 import { quotaService } from "./services/quota.js";
 import type {
   AiAttachment,
@@ -2727,16 +2725,7 @@ export class TeleTopazService {
   }
 
   private createProviderClient(provider: ProviderType): AiClient {
-    if (provider === "gemini") {
-      if (process.env.TELETOPAZ_USE_PTY === "1") {
-        return new GeminiPtyClient();
-      }
-      return new GeminiSdkClient();
-    }
-    if (provider === "claude-code") {
-      return new ClaudeCodeSdkClient();
-    }
-    return new CopilotSdkClient();
+    return createProviderClient(provider);
   }
 
   private resolveProviderForModel(model: string): ProviderType {

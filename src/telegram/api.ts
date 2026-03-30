@@ -182,6 +182,10 @@ export class TelegramApi {
     return this.call<boolean>("setMessageReaction", options);
   }
 
+  async sendChatAction(options: { chat_id: number | string; action: string }): Promise<boolean> {
+    return this.call<boolean>("sendChatAction", options);
+  }
+
   async getFile(file_id: string): Promise<TelegramFile> {
     return this.call<TelegramFile>("getFile", { file_id });
   }

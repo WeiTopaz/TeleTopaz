@@ -17,10 +17,8 @@ import os from "node:os";
 import { promises as fs } from "node:fs";
 import { WhatsAppClient, type WaMessage, type WaMessageKey } from "./client.js";
 import { markdownToWhatsApp, splitLongMessage } from "./markdown.js";
-import { CopilotSdkClient } from "../copilot/sdk.js";
-import { ClaudeCodeSdkClient } from "../claude/sdk.js";
-import { GeminiSdkClient } from "../gemini/sdk.js";
-import { GeminiPtyClient } from "../gemini/pty-session.js";
+import { createProviderClient } from "../provider/factory.js";
+import type { WaAttachment, WaPendingTask, WaRecovery, WaToolTracking, WaState } from "./types.js";
 import { SessionMemoryStore } from "../session/memory-store.js";
 import { buildPersonaPrompt } from "../session/persona.js";
 import { loadConfiguredRuntimeConfig, loadWaOwnerJids } from "../config/secrets.js";
@@ -49,51 +47,7 @@ const CLASSIFIER_TIMEOUT_MS = 30_000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export interface WaAttachment {
-  filePath: string;
-  mime: string;
-}
-
-export interface WaPendingTask {
-  prompt: string;
-  attachments: WaAttachment[];
-  queuedAt: number;
-}
-
-interface WaRecovery {
-  prompt: string;
-  attachments: WaAttachment[];
-}
-
-interface WaToolTracking {
-  toolName: string;
-  callId: string;
-  msgKey: WaMessageKey | undefined;
-  startTime: number;
-}
-
-export interface WaState {
-  client: AiClient | undefined;
-  session: AiSession | undefined;
-  workDir: string;
-  model: string;
-  provider: ProviderType;
-  mode: "manual" | "auto";
-  routerModel: string | undefined;
-  coreModel: string | undefined;
-  processing: boolean;
-  pendingTasks: WaPendingTask[];
-  lastPrompt: string | undefined;
-  lastReply: string | undefined;
-  sessionCreatedAt: number | undefined;
-  sessionLastActivityAt: number | undefined;
-  pendingRecovery: WaRecovery | undefined;
-  promptCycles: number;
-  allowAll: boolean;
-  silentMode: boolean;
-  toolMessageMap: Map<string, WaToolTracking>;
-  currentAttachments: WaAttachment[];
-}
+export type { WaAttachment, WaPendingTask, WaState } from "./types.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -101,14 +55,6 @@ function resolveApprovalMode(p: ProviderType): "plan" | "auto_edit" | undefined 
   if (p === "gemini") return "plan";
   if (p === "claude-code") return "auto_edit";
   return undefined;
-}
-
-function createProviderClient(provider: ProviderType): AiClient {
-  if (provider === "gemini") {
-    return process.env["TELETOPAZ_USE_PTY"] === "1" ? new GeminiPtyClient() : new GeminiSdkClient();
-  }
-  if (provider === "claude-code") return new ClaudeCodeSdkClient();
-  return new CopilotSdkClient();
 }
 
 /** Stable numeric hash of a JID string, used as chatId for SessionMemoryStore. */
