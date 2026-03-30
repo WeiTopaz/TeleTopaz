@@ -72,11 +72,14 @@ describe("TeleTopazService session memory", () => {
     const client = createClient(session);
     const service = new TeleTopazService(api, "1", "1", 0);
 
+    const builtinSkillsPath = path.resolve(".github/skills");
+    const workspaceSkillsPath = "/tmp/project/.github/skills";
+
     (service as unknown as { loadAllowedDirectories: () => Promise<string[]> }).loadAllowedDirectories = vi.fn().mockResolvedValue(["/tmp/project"]);
     (service as unknown as { getModels: () => Promise<string[]> }).getModels = vi.fn().mockResolvedValue(["gpt-5-mini"]);
     (service as unknown as { createProviderClient: () => AiClient }).createProviderClient = vi.fn().mockReturnValue(client);
     (service as unknown as { safeSend: () => Promise<undefined> }).safeSend = vi.fn().mockResolvedValue(undefined);
-    (service as unknown as { findSkillsPath: (cwd: string) => Promise<string | undefined> }).findSkillsPath = vi.fn().mockResolvedValue("/tmp/project/.github/skills");
+    (service as unknown as { collectSkillDirectories: (cwd: string) => Promise<string[]> }).collectSkillDirectories = vi.fn().mockResolvedValue([builtinSkillsPath, workspaceSkillsPath]);
     (service as unknown as { sessionMemory: { buildContext: (scope: unknown) => Promise<string | undefined> } }).sessionMemory = {
       buildContext: vi.fn().mockResolvedValue(undefined)
     };
@@ -88,10 +91,7 @@ describe("TeleTopazService session memory", () => {
     expect(client.createSession).toHaveBeenCalledOnce();
     const options = vi.mocked(client.createSession).mock.calls[0]?.[0];
     expect(options?.skillDirectories).toEqual(
-      expect.arrayContaining([
-        path.resolve(".github/skills"),
-        "/tmp/project/.github/skills"
-      ])
+      expect.arrayContaining([builtinSkillsPath, workspaceSkillsPath])
     );
   });
 
