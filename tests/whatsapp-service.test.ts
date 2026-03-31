@@ -557,6 +557,58 @@ describe("Tool event handling", () => {
   });
 });
 
+describe("Quoted message context", () => {
+  beforeEach(() => { vi.clearAllMocks(); mockSendMessage.mockResolvedValue({ id: "mock-id", remoteJid: "jid@s.whatsapp.net", fromMe: true }); });
+
+  it("prepends quoted text as context when message has quotedText", async () => {
+    const { svc, mockSession } = await buildService("886912345678");
+    const jid = "886912345678@s.whatsapp.net";
+
+    // Pre-create session so processPrompt goes straight to session.send
+    svc.sessions.set(jid, makeWaState({
+      session: mockSession as unknown as AiSession,
+      workDir: "/tmp/project",
+    }));
+
+    await svc.handleMessage({
+      id: "q1",
+      from: jid,
+      content: "請解釋這段話",
+      timestamp: 1,
+      isGroup: false,
+      messageKey: { id: "q1", remoteJid: jid, fromMe: true },
+      quotedText: "previous message content",
+    });
+
+    // session.send should have been called with the quoted context prepended
+    expect(mockSession.send).toHaveBeenCalledWith(
+      "> [引用] previous message content\n\n請解釋這段話",
+      undefined,
+    );
+  });
+
+  it("passes plain prompt without modification when no quotedText", async () => {
+    const { svc, mockSession } = await buildService("886912345678");
+    const jid = "886912345678@s.whatsapp.net";
+
+    svc.sessions.set(jid, makeWaState({
+      session: mockSession as unknown as AiSession,
+      workDir: "/tmp/project",
+    }));
+
+    await svc.handleMessage({
+      id: "q2",
+      from: jid,
+      content: "ordinary message",
+      timestamp: 2,
+      isGroup: false,
+      messageKey: { id: "q2", remoteJid: jid, fromMe: true },
+    });
+
+    expect(mockSession.send).toHaveBeenCalledWith("ordinary message", undefined);
+  });
+});
+
 describe("Session lifecycle", () => {
   beforeEach(() => { vi.clearAllMocks(); mockSendMessage.mockResolvedValue({ id: "mock-id", remoteJid: "jid@s.whatsapp.net", fromMe: true }); });
 

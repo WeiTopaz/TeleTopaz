@@ -39,6 +39,8 @@ export interface WaMessage {
   isGroup: boolean;
   mediaItems?: WaMediaItem[];
   messageKey: WaMessageKey;
+  /** Text of the quoted/replied-to message, if any. */
+  quotedText?: string;
 }
 
 export interface WhatsAppClientOptions {
@@ -136,6 +138,13 @@ export class WhatsAppClient {
         if (!unwrapped) continue;
 
         const content = this.getTextContent(unwrapped) ?? "";
+        const quotedText = unwrapped.extendedTextMessage?.contextInfo?.quotedMessage
+          ? (
+              unwrapped.extendedTextMessage.contextInfo.quotedMessage.conversation ??
+              unwrapped.extendedTextMessage.contextInfo.quotedMessage.extendedTextMessage?.text ??
+              null
+            )
+          : null;
         const mediaItems: WaMediaItem[] = [];
 
         if (unwrapped.imageMessage) {
@@ -167,6 +176,7 @@ export class WhatsAppClient {
           isGroup,
           ...(mediaItems.length > 0 ? { mediaItems } : {}),
           messageKey: msgKey,
+          ...(quotedText ? { quotedText } : {}),
         });
       }
     });
