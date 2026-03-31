@@ -7,6 +7,7 @@ import type { WaState, WaPendingTask } from "../src/whatsapp/service.js";
 const mockSendMessage = vi.fn().mockResolvedValue({ id: "mock-id", remoteJid: "jid@s.whatsapp.net", fromMe: true });
 const mockSendPresenceUpdate = vi.fn().mockResolvedValue(undefined);
 const mockSendReaction = vi.fn().mockResolvedValue(undefined);
+const mockMarkAsRead = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../src/whatsapp/client.js", () => ({
   WhatsAppClient: vi.fn().mockImplementation(function(this: Record<string, unknown>) {
@@ -15,6 +16,7 @@ vi.mock("../src/whatsapp/client.js", () => ({
     this["sendMessage"] = mockSendMessage;
     this["sendPresenceUpdate"] = mockSendPresenceUpdate;
     this["sendReaction"] = mockSendReaction;
+    this["markAsRead"] = mockMarkAsRead;
     this["sendImage"] = vi.fn().mockResolvedValue({ id: "img-id", remoteJid: "jid@s.whatsapp.net", fromMe: true });
     this["sendDocument"] = vi.fn().mockResolvedValue({ id: "doc-id", remoteJid: "jid@s.whatsapp.net", fromMe: true });
   }),
@@ -69,6 +71,7 @@ type MockWaClient = {
   sendMessage: ReturnType<typeof vi.fn>;
   sendPresenceUpdate: ReturnType<typeof vi.fn>;
   sendReaction: ReturnType<typeof vi.fn>;
+  markAsRead: ReturnType<typeof vi.fn>;
   sendImage: ReturnType<typeof vi.fn>;
   sendDocument: ReturnType<typeof vi.fn>;
 };
@@ -216,6 +219,15 @@ describe("WhatsApp message routing", () => {
 
     const msg = vi.mocked(svc.wa.sendMessage).mock.calls[0]?.[1] as string;
     expect(msg).toContain("待辦已滿");
+  });
+
+  it("calls markAsRead on the WA client when an owner message is received", async () => {
+    const { svc } = await buildService("886912345678");
+    const jid = "886912345678@s.whatsapp.net";
+    const msgKey = { id: "msg-read-id", remoteJid: jid, fromMe: false };
+    await svc.handleMessage({ id: "msg-read-id", from: jid, content: "hello", timestamp: 1, isGroup: false, messageKey: msgKey });
+
+    expect(svc.wa.markAsRead).toHaveBeenCalledWith(jid, msgKey);
   });
 });
 
@@ -542,6 +554,58 @@ describe("Tool event handling", () => {
     // In silent mode, no reaction and no complete message
     expect(svc.wa.sendReaction).not.toHaveBeenCalled();
     expect(svc.wa.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("Quoted message context", () => {
+  beforeEach(() => { vi.clearAllMocks(); mockSendMessage.mockResolvedValue({ id: "mock-id", remoteJid: "jid@s.whatsapp.net", fromMe: true }); });
+
+  it("prepends quoted text as context when message has quotedText", async () => {
+    const { svc, mockSession } = await buildService("886912345678");
+    const jid = "886912345678@s.whatsapp.net";
+
+    // Pre-create session so processPrompt goes straight to session.send
+    svc.sessions.set(jid, makeWaState({
+      session: mockSession as unknown as AiSession,
+      workDir: "/tmp/project",
+    }));
+
+    await svc.handleMessage({
+      id: "q1",
+      from: jid,
+      content: "請解釋這段話",
+      timestamp: 1,
+      isGroup: false,
+      messageKey: { id: "q1", remoteJid: jid, fromMe: true },
+      quotedText: "previous message content",
+    });
+
+    // session.send should have been called with the quoted context prepended
+    expect(mockSession.send).toHaveBeenCalledWith(
+      "> [引用] previous message content\n\n請解釋這段話",
+      undefined,
+    );
+  });
+
+  it("passes plain prompt without modification when no quotedText", async () => {
+    const { svc, mockSession } = await buildService("886912345678");
+    const jid = "886912345678@s.whatsapp.net";
+
+    svc.sessions.set(jid, makeWaState({
+      session: mockSession as unknown as AiSession,
+      workDir: "/tmp/project",
+    }));
+
+    await svc.handleMessage({
+      id: "q2",
+      from: jid,
+      content: "ordinary message",
+      timestamp: 2,
+      isGroup: false,
+      messageKey: { id: "q2", remoteJid: jid, fromMe: true },
+    });
+
+    expect(mockSession.send).toHaveBeenCalledWith("ordinary message", undefined);
   });
 });
 

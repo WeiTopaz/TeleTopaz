@@ -7,6 +7,7 @@ function makeMockClient(): WhatsAppClient {
     sendMessage: vi.fn(),
     sendPresenceUpdate: vi.fn(),
     sendReaction: vi.fn(),
+    markAsRead: vi.fn(),
   } as unknown as WhatsAppClient;
 }
 

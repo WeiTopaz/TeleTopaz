@@ -195,6 +195,9 @@ export class WhatsAppService {
     const senderJid = msg.isGroup ? (msg.participant ?? "") : msg.from;
     if (!this.isOwner(senderJid)) return;
 
+    // Mark the message as read so the sender sees the bot has received it.
+    await this.wa.markAsRead(msg.from, msg.messageKey).catch(() => undefined);
+
     logger.info("WA message received", {
       from: msg.from,
       sender: senderJid,
@@ -221,6 +224,11 @@ export class WhatsAppService {
 
     if (!text && attachments.length === 0) return;
 
+    // Build prompt: prepend quoted message context when the user replies to a message
+    const prompt = msg.quotedText
+      ? `> [引用] ${msg.quotedText}\n\n${text}`
+      : text;
+
     // Guardrails: only validate text prompts (not empty text with media only)
     if (text) {
       const policy = await this.guardrailsPromise;
@@ -238,13 +246,13 @@ export class WhatsAppService {
         await this.send(msg.from, "⚠️ 待辦已滿，請稍後再試。");
         return;
       }
-      const task: WaPendingTask = { prompt: text, attachments, queuedAt: Date.now() };
+      const task: WaPendingTask = { prompt, attachments, queuedAt: Date.now() };
       state.pendingTasks.push(task);
       await this.send(msg.from, `⏳ 已排隊 (${state.pendingTasks.length}/${MAX_PENDING})`);
       return;
     }
 
-    await this.processPrompt(msg.from, { prompt: text, attachments, queuedAt: Date.now() });
+    await this.processPrompt(msg.from, { prompt, attachments, queuedAt: Date.now() });
   }
 
   // ─── Commands ─────────────────────────────────────────────────────────────
