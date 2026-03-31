@@ -250,6 +250,11 @@ export class WhatsAppClient {
     }).catch(() => undefined);
   }
 
+  async markAsRead(jid: string, msgKey: WaMessageKey): Promise<void> {
+    if (!this.sock) return;
+    await this.sock.readMessages([{ id: msgKey.id, remoteJid: jid, fromMe: false }]).catch(() => undefined);
+  }
+
   async disconnect(): Promise<void> {
     if (this.sock) {
       this.sock.end(undefined);

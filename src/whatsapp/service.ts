@@ -195,6 +195,9 @@ export class WhatsAppService {
     const senderJid = msg.isGroup ? (msg.participant ?? "") : msg.from;
     if (!this.isOwner(senderJid)) return;
 
+    // Mark the message as read so the sender sees the bot has received it.
+    await this.wa.markAsRead(msg.from, msg.messageKey).catch(() => undefined);
+
     logger.info("WA message received", {
       from: msg.from,
       sender: senderJid,
