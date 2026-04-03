@@ -84,6 +84,28 @@ function isQuietHours(nowMs: number = Date.now()): boolean {
 
 const ROUTER_MODEL_PATTERN = /(?:^|[-.])(mini|flash|lite|haiku)(?:$|[-.])/i;
 
+interface ShortcutConfig {
+  label: string;
+  callbackKey: string;
+  targetDirName: string;
+  modelEntry: string;
+}
+
+const SHORTCUT_BUTTONS: ShortcutConfig[] = [
+  {
+    label: "📔 日記",
+    callbackKey: "diary",
+    targetDirName: "MyDiary",
+    modelEntry: "ctcli:gpt-5-mini",
+  },
+  {
+    label: "📓 筆記",
+    callbackKey: "notebook",
+    targetDirName: "MyNotebook",
+    modelEntry: "cccli:claude-sonnet-4.6",
+  },
+];
+
 type CreateSessionOptions = {
   announce?: boolean;
 };
@@ -1174,6 +1196,11 @@ export class TeleTopazService {
       await this.sendStatus(chatId);
       return;
     }
+    if (data.startsWith("do.shortcut:")) {
+      const shortcutKey = data.slice(12);
+      await this.handleShortcut(chatId, shortcutKey);
+      return;
+    }
     if (data === "do.help") {
       await this.sendWelcome(undefined, await this.loadAllowedDirectories(), await this.getModels(this.getOrCreateState(chatId!).provider));
       return;
@@ -1509,6 +1536,33 @@ export class TeleTopazService {
     await this.safeSend(chatId, "請選擇 **Core 模型** (深度問答、代碼、寫作)：", undefined, keyboard);
   }
 
+  private async handleShortcut(chatId: number, shortcutKey: string): Promise<void> {
+    const config = SHORTCUT_BUTTONS.find((sc) => sc.callbackKey === shortcutKey);
+    if (!config) {
+      await this.safeSend(chatId, "未知的快捷操作。");
+      return;
+    }
+
+    const dirs = await this.loadAllowedDirectories();
+    const targetDir = dirs.find((d) => path.basename(d) === config.targetDirName);
+    if (!targetDir) {
+      await this.safeSend(
+        chatId,
+        `找不到「${config.targetDirName}」專案，請先透過 /newproject 建立或確認目錄設定。`
+      );
+      return;
+    }
+
+    const state = this.getOrCreateState(chatId);
+    const parsed = parseConfiguredModelEntry(config.modelEntry);
+    state.provider = parsed.provider;
+    state.model = parsed.model;
+    state.mode = "manual";
+
+    await this.createSession(chatId, targetDir, parsed.model);
+    await this.sendStatusFooter(chatId);
+  }
+
   private async sendDirectoryList(chatId: number): Promise<void> {
     const dirs = await this.loadAllowedDirectories();
     if (!dirs.length) {
@@ -1646,15 +1700,7 @@ export class TeleTopazService {
       "/help — 顯示說明與指令列表"
     );
 
-    const keyboard: InlineKeyboardMarkup = {
-      inline_keyboard: [
-        [
-          { text: "📁 專案", callback_data: "do.project" },
-          { text: "⚙️ 模型", callback_data: "do.model" },
-          { text: "📋 說明", callback_data: "do.info" }
-        ]
-      ]
-    };
+    const keyboard = this.buildNavKeyboard();
 
     await this.safeSend(chatId, lines.join("\n"), undefined, keyboard);
   }
@@ -2765,14 +2811,20 @@ export class TeleTopazService {
   }
 
   private buildNavKeyboard(): InlineKeyboardMarkup {
+    const shortcuts = SHORTCUT_BUTTONS.map((sc) => ({
+      text: sc.label,
+      callback_data: `do.shortcut:${sc.callbackKey}`,
+    }));
+
     return {
       inline_keyboard: [
         [
           { text: "📁 專案", callback_data: "do.project" },
           { text: "⚙️ 模型", callback_data: "do.model" },
           { text: "📋 說明", callback_data: "do.info" }
-        ]
-      ]
+        ],
+        shortcuts,
+      ],
     };
   }
 
