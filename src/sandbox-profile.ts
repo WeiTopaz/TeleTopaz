@@ -81,6 +81,8 @@ export function buildSandboxProfile(options?: SandboxProfileOptions): string {
     "(allow file-write* (subpath \"/var/folders\"))",
     `(allow file-write* (subpath "/private/tmp/claude-${uid}"))`,
     `(allow file-write* (subpath "/tmp/claude-${uid}"))`,
+    `(allow file-write* (regex "^/private/tmp/claude-settings-"))`,
+    `(allow file-write* (regex "^/tmp/claude-settings-"))`,
     `(allow file-write* (subpath "${appDataDir}"))`,
     "",
     "; Allow macOS Keychain writes (so 'Always Allow' ACL updates persist)",

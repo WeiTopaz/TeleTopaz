@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { writeFileSync, unlinkSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { ClaudeCodeSdkSession } from "../src/claude/sdk.js";
 
@@ -13,6 +14,11 @@ vi.mock("node:child_process", () => ({
     kill: vi.fn(),
     pid: 12345
   }))
+}));
+
+vi.mock("node:fs", () => ({
+  writeFileSync: vi.fn(),
+  unlinkSync: vi.fn()
 }));
 
 describe("ClaudeCodeSdkSession", () => {
@@ -61,7 +67,8 @@ describe("ClaudeCodeSdkSession", () => {
     };
   }
 
-  it("passes Claude home access settings to the CLI", async () => {
+  it("passes Claude home access settings via a temp file path, not inline JSON", async () => {
+    vi.mocked(writeFileSync).mockClear();
     const mockChild = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mockChild.child as ReturnType<typeof spawn>);
     const session = new ClaudeCodeSdkSession({
@@ -77,6 +84,7 @@ describe("ClaudeCodeSdkSession", () => {
     mockChild.emitClose(0);
     await expect(promise).resolves.toBe("");
 
+    // --settings 後面必須是檔案路徑，不是 inline JSON
     const args = vi.mocked(spawn).mock.calls.at(-1)?.[1];
     expect(args).toEqual(expect.arrayContaining([
       "--permission-mode",
@@ -88,17 +96,23 @@ describe("ClaudeCodeSdkSession", () => {
 
     const settingsIndex = args?.indexOf("--settings") ?? -1;
     expect(settingsIndex).toBeGreaterThan(-1);
+    const rawSettings = args?.[settingsIndex + 1];
 
-    const rawSettings = settingsIndex >= 0 ? args?.[settingsIndex + 1] : undefined;
-    expect(typeof rawSettings).toBe("string");
+    // 必須是路徑格式（包含 teletopaz-claude-settings），不是 inline JSON
+    expect(rawSettings).toMatch(/teletopaz-claude-settings-.*\.json$/);
+    expect(() => JSON.parse(String(rawSettings))).toThrow(); // 路徑不是有效 JSON
 
-    const settings = JSON.parse(String(rawSettings)) as {
+    // writeFileSync 必須被呼叫，且寫入的是正確 settings 內容
+    expect(vi.mocked(writeFileSync)).toHaveBeenCalledTimes(1);
+    const [writtenPath, writtenContent] = vi.mocked(writeFileSync).mock.calls[0] as [string, string, string];
+    expect(writtenPath).toBe(rawSettings); // 路徑一致
+
+    const settings = JSON.parse(writtenContent) as {
       permissions?: {
         allow?: string[];
         additionalDirectories?: string[];
       };
     };
-
     expect(settings.permissions?.additionalDirectories).toEqual(
       expect.arrayContaining(["~/.claude", "/tmp/project"])
     );
@@ -112,7 +126,31 @@ describe("ClaudeCodeSdkSession", () => {
     );
   });
 
+  it("cleans up the temp settings file after the child process closes", async () => {
+    vi.mocked(writeFileSync).mockClear();
+    vi.mocked(unlinkSync).mockClear();
+    const mockChild = createMockChildProcess();
+    vi.mocked(spawn).mockReturnValue(mockChild.child as ReturnType<typeof spawn>);
+    const session = new ClaudeCodeSdkSession({
+      model: "claude-sonnet-4.6",
+      approvalMode: "plan",
+      workingDirectory: "/tmp/project"
+    });
+
+    const promise = (session as unknown as {
+      spawnClaudeCodeCli: (prompt: string, signal: AbortSignal) => Promise<string>;
+    }).spawnClaudeCodeCli("test", new AbortController().signal);
+
+    mockChild.emitClose(0);
+    await promise;
+
+    // temp 檔必須在 close 後被清除
+    const [writtenPath] = vi.mocked(writeFileSync).mock.calls[0] as [string, string, string];
+    expect(vi.mocked(unlinkSync)).toHaveBeenCalledWith(writtenPath);
+  });
+
   it("maps auto_edit approval mode to acceptEdits for the CLI", async () => {
+    vi.mocked(writeFileSync).mockClear();
     const mockChild = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mockChild.child as ReturnType<typeof spawn>);
     const session = new ClaudeCodeSdkSession({

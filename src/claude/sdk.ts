@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { writeFileSync, unlinkSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type { AiAttachment, AiClient, AiSession, AiEvent, AiSessionOptions, AiProviderInfo } from "../provider/types.js";
@@ -47,8 +49,8 @@ function toAbortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
 
-function buildClaudeHomeAccessSettings(workDir: string): string {
-  return JSON.stringify({
+function writeClaudeSettingsFile(workDir: string): string {
+  const settings = {
     permissions: {
       allow: [
         "Read(~/.claude/**)",
@@ -58,7 +60,13 @@ function buildClaudeHomeAccessSettings(workDir: string): string {
       ],
       additionalDirectories: ["~/.claude", workDir]
     }
-  });
+  };
+  const tmpPath = path.join(
+    os.tmpdir(),
+    `teletopaz-claude-settings-${randomBytes(8).toString("hex")}.json`
+  );
+  writeFileSync(tmpPath, JSON.stringify(settings), "utf8");
+  return tmpPath;
 }
 
 export class ClaudeCodeSdkClient implements AiClient {
@@ -217,7 +225,9 @@ export class ClaudeCodeSdkSession implements AiSession {
       const permissionMode = this.resolvePermissionMode();
       const cwd = this.options.workingDirectory || process.cwd();
       const claudeConfigDir = path.join(os.homedir(), ".claude");
-      const claudeSettings = buildClaudeHomeAccessSettings(cwd);
+      // 寫入唯一 temp 檔並傳路徑，避免 Claude CLI 以 content hash 建立固定 /tmp/claude-settings-*.json
+      // 該路徑被 sandbox 阻擋（沙盒只允許 /tmp/claude-<uid>/）。
+      const settingsPath = writeClaudeSettingsFile(cwd);
 
       const args = [
         "-p",                               // print mode（非互動）
@@ -227,7 +237,7 @@ export class ClaudeCodeSdkSession implements AiSession {
         "--permission-mode", permissionMode,
         // Claude Code 將 ~/.claude 視為使用者設定目錄；顯式納入權限範圍避免被 CLI 拒絕。
         "--add-dir", claudeConfigDir,
-        "--settings", claudeSettings
+        "--settings", settingsPath
       ];
 
       // 追加系統提示詞（如果有且非空）
@@ -251,6 +261,7 @@ export class ClaudeCodeSdkSession implements AiSession {
       const cleanup = () => {
         signal.removeEventListener("abort", abortHandler);
         clearTimeout(timeoutTimer);
+        try { unlinkSync(settingsPath); } catch { /* ignore — temp 檔已不存在或無法刪除 */ }
       };
 
       const finish = (err: Error | null, result?: string) => {
