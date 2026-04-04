@@ -20,6 +20,13 @@ export function isTelegramReactionInvalid(error: unknown): boolean {
   return message.includes("REACTION_INVALID");
 }
 
+export function isTelegramNotModifiedError(error: unknown): boolean {
+  if (!error) return false;
+  const anyErr = error as { message?: string };
+  const message = anyErr.message ?? "";
+  return message.includes("message is not modified");
+}
+
 const TRANSIENT_NETWORK_CODES = new Set([
   "ETIMEDOUT",
   "ENETUNREACH",

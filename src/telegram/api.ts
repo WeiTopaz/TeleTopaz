@@ -145,6 +145,7 @@ export class TelegramApi {
     reply_to_message_id?: number;
     reply_markup?: InlineKeyboardMarkup;
     disable_web_page_preview?: boolean;
+    disable_notification?: boolean;
   }): Promise<TelegramMessage> {
     return this.call<TelegramMessage>("sendMessage", options);
   }

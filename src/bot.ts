@@ -36,6 +36,7 @@ import {
   consumeRepeatedLog,
   extractNetworkErrorSummary,
   isConnectionDisposedError,
+  isTelegramNotModifiedError,
   isTelegramReactionInvalid,
   isTransientTelegramNetworkError
 } from "./util/errors.js";
@@ -656,7 +657,12 @@ export class TeleTopazService {
       }
       state.pendingTasks.push({ prompt, queuedAt: Date.now() });
       logger.info("Prompt queued", { chatId, size: state.pendingTasks.length });
-      await this.safeSend(chatId, `已加入待辦 (${state.pendingTasks.length}/${PENDING_LIMIT})`, message.message_id);
+      const queueNotice = `已加入待辦 (${state.pendingTasks.length}/${PENDING_LIMIT})`;
+      if (state.silentMode) {
+        await this.silentSend(chatId, queueNotice, message.message_id);
+      } else {
+        await this.safeSend(chatId, queueNotice, message.message_id);
+      }
       return;
     }
 
@@ -770,11 +776,12 @@ export class TeleTopazService {
     logger.info("Prompt sending", { chatId: state.chatId });
     const sendResult = await this.sendPrompt(state, prompt, replyTo, promptLimit, aiAttachments);
     if (sendResult.chunked && sendResult.totalChunks > 1) {
-      await this.safeSend(
-        state.chatId,
-        `提示詞過長，已拆分為 ${sendResult.totalChunks} 段送出以維持完整內容。`,
-        replyTo
-      );
+      const chunkNotice = `提示詞過長，已拆分為 ${sendResult.totalChunks} 段送出以維持完整內容。`;
+      if (state.silentMode) {
+        await this.silentSend(state.chatId, chunkNotice, replyTo);
+      } else {
+        await this.safeSend(state.chatId, chunkNotice, replyTo);
+      }
     }
     return sendResult;
   }
@@ -1240,7 +1247,12 @@ export class TeleTopazService {
       if (pending) {
         this.pendingToolConfirmations.delete(confirmId);
         pending.resolve(true);
-        await this.safeSend(chatId, "✅ 已允許執行。", message?.message_id);
+        const confirmState = this.states.get(chatId);
+        if (confirmState?.silentMode && confirmState.silentAnchorMessageId) {
+          await this.editMessageSafe(chatId, confirmState.silentAnchorMessageId, "✅ 已允許執行。");
+        } else {
+          await this.safeSend(chatId, "✅ 已允許執行。", message?.message_id);
+        }
       }
       return;
     }
@@ -1250,7 +1262,12 @@ export class TeleTopazService {
       if (pending) {
         this.pendingToolConfirmations.delete(confirmId);
         pending.resolve(false);
-        await this.safeSend(chatId, "❌ 已拒絕執行。", message?.message_id);
+        const denyState = this.states.get(chatId);
+        if (denyState?.silentMode && denyState.silentAnchorMessageId) {
+          await this.editMessageSafe(chatId, denyState.silentAnchorMessageId, "❌ 已拒絕執行。");
+        } else {
+          await this.safeSend(chatId, "❌ 已拒絕執行。", message?.message_id);
+        }
       }
       return;
     }
@@ -1304,7 +1321,11 @@ export class TeleTopazService {
         { text: "❌ 拒絕", callback_data: `tool.deny:${confirmId}` }
       ]]
     };
-    await this.safeSend(chatId, text, undefined, keyboard);
+    if (state?.silentMode && state.silentAnchorMessageId) {
+      await this.editMessageSafe(chatId, state.silentAnchorMessageId, text, keyboard);
+    } else {
+      await this.safeSend(chatId, text, undefined, keyboard);
+    }
 
     return new Promise<boolean>((resolve) => {
       this.pendingToolConfirmations.set(confirmId, { resolve });
@@ -2127,13 +2148,17 @@ export class TeleTopazService {
             return;
           }
           state.lastAssistantMessageHash = hash;
-          if (state.processingMessageId && content.length <= 3500) {
-            await this.editMessageSafe(chatId, state.processingMessageId, content);
+          const editTarget = state.processingMessageId
+            ?? (state.silentMode ? state.silentAnchorMessageId : undefined);
+          if (editTarget && content.length <= 3500) {
+            await this.editMessageSafe(chatId, editTarget, content);
             state.processingMessageId = undefined;
           } else {
-            await this.sendAssistantMessage(chatId, content, state.replyToMessageId);
-            if (state.processingMessageId) {
-              await this.editMessageSafe(chatId, state.processingMessageId, "✅完成");
+            // 長回覆或無 anchor：silent mode 下靜音推送，並將 anchor 更新為 ✅完成
+            const silent = state.silentMode && !!state.silentAnchorMessageId;
+            await this.sendAssistantMessage(chatId, content, state.replyToMessageId, silent);
+            if (editTarget) {
+              await this.editMessageSafe(chatId, editTarget, "✅完成");
               state.processingMessageId = undefined;
             }
           }
@@ -2207,11 +2232,12 @@ export class TeleTopazService {
         const promptLimit = policy.maxPromptLength ?? MESSAGE_LIMIT;
         const sendResult = await this.sendPrompt(state, nextPrompt, state.replyToMessageId, promptLimit);
         if (sendResult.chunked && sendResult.totalChunks > 1) {
-          await this.safeSend(
-            chatId,
-            `提示詞過長，已拆分為 ${sendResult.totalChunks} 段送出以維持完整內容。`,
-            state.replyToMessageId
-          );
+          const chunkNotice = `提示詞過長，已拆分為 ${sendResult.totalChunks} 段送出以維持完整內容。`;
+          if (state.silentMode) {
+            await this.silentSend(chatId, chunkNotice, state.replyToMessageId);
+          } else {
+            await this.safeSend(chatId, chunkNotice, state.replyToMessageId);
+          }
         }
         return;
       }
@@ -2458,7 +2484,7 @@ export class TeleTopazService {
     return undefined;
   }
 
-  private async sendAssistantMessage(chatId: number, text: string, replyTo?: number): Promise<void> {
+  private async sendAssistantMessage(chatId: number, text: string, replyTo?: number, disableNotification?: boolean): Promise<void> {
     const state = this.getOrCreateState(chatId);
     let content = text;
     if ((state as any).pendingFooter) {
@@ -2470,7 +2496,7 @@ export class TeleTopazService {
       logger.warn("Assistant message empty", { chatId });
       return;
     }
-    await this.safeSend(chatId, content, replyTo);
+    await this.safeSend(chatId, content, replyTo, undefined, disableNotification ? { disableNotification: true } : undefined);
   }
 
   private async sendDoneNotice(chatId: number, state: AgentContext): Promise<void> {
@@ -2521,7 +2547,8 @@ export class TeleTopazService {
     chatId: number,
     text: string,
     replyTo?: number,
-    keyboard?: InlineKeyboardMarkup
+    keyboard?: InlineKeyboardMarkup,
+    options?: { disableNotification?: boolean }
   ): Promise<TelegramMessage | undefined> {
     const redacted = this.prepareOutgoingRaw(chatId, text);
     const chunks = splitLongMessage(redacted, MESSAGE_LIMIT);
@@ -2535,7 +2562,8 @@ export class TeleTopazService {
         parse_mode: "MarkdownV2",
         ...(reply !== undefined ? { reply_to_message_id: reply } : {}),
         ...(index === 0 && keyboard ? { reply_markup: keyboard } : {}),
-        disable_web_page_preview: true
+        disable_web_page_preview: true,
+        ...(options?.disableNotification ? { disable_notification: true } : {})
       };
       try {
         lastMessage = await this.api.sendMessage(payload);
@@ -2547,7 +2575,8 @@ export class TeleTopazService {
             text: fallback,
             ...(reply !== undefined ? { reply_to_message_id: reply } : {}),
             ...(index === 0 && keyboard ? { reply_markup: keyboard } : {}),
-            disable_web_page_preview: true
+            disable_web_page_preview: true,
+            ...(options?.disableNotification ? { disable_notification: true } : {})
           });
         } catch (err) {
           logger.error("Send message failed", err);
@@ -2574,6 +2603,9 @@ export class TeleTopazService {
       });
       return;
     } catch (err) {
+      if (isTelegramNotModifiedError(err)) {
+        return; // 內容未變動，視為成功
+      }
       logger.warn("Edit message failed, fallback to plain text", err);
     }
     try {
@@ -2584,6 +2616,9 @@ export class TeleTopazService {
         ...(keyboard ? { reply_markup: keyboard } : {})
       });
     } catch (err) {
+      if (isTelegramNotModifiedError(err)) {
+        return; // 內容未變動，視為成功
+      }
       logger.warn("Edit message plain failed, fallback to send", err);
       await this.safeSend(chatId, text, undefined, keyboard);
     }
@@ -2859,6 +2894,10 @@ export class TeleTopazService {
   }
 
   private async sendStatusFooter(chatId: number): Promise<void> {
+    const state = this.getOrCreateState(chatId);
+    if (state.silentMode) {
+      return; // silent mode 不主動推送系統狀態，使用者可用 /info 主動查看
+    }
     const text = await this.buildStatusBlock(chatId);
     await this.safeSend(chatId, text.trim(), undefined, this.buildNavKeyboard());
   }
