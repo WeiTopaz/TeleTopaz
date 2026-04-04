@@ -29,6 +29,8 @@ describe("sandbox profile", () => {
     expect(profile).toContain("(allow file-write* (subpath \"/var/folders\"))");
     expect(profile).toContain(`(allow file-write* (subpath "/private/tmp/claude-${uid}"))`);
     expect(profile).toContain(`(allow file-write* (subpath "/tmp/claude-${uid}"))`);
+    expect(profile).toContain('(allow file-write* (regex "^/private/tmp/claude-settings-"))');
+    expect(profile).toContain('(allow file-write* (regex "^/tmp/claude-settings-"))');
     expect(profile).toContain(`(allow file-write* (subpath "${home}/.teletopaz"))`);
     expect(profile).toContain(`(allow file-write* (subpath "${home}/Library/Application Support/GitHub Copilot"))`);
     expect(profile).toContain(`(allow file-write* (subpath "${home}/.config/github-copilot"))`);
