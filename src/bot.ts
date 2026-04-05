@@ -117,9 +117,9 @@ type SendPromptResult = {
   recovered?: boolean;
 };
 
-function resolveApprovalMode(provider: ProviderType): "plan" | "auto_edit" | undefined {
+function resolveApprovalMode(provider: ProviderType, allowAll?: boolean): "plan" | "auto_edit" | "yolo" | undefined {
   if (provider === "gemini") return "plan";
-  if (provider === "claude-code") return "auto_edit";
+  if (provider === "claude-code") return allowAll ? "yolo" : "auto_edit";
   return undefined;
 }
 
@@ -1865,7 +1865,7 @@ export class TeleTopazService {
         memoryContext = await this.sessionMemory.buildContext({ chatId, workDir: canonicalCwd });
       } catch {}
       const systemPrompt = await buildPersonaPrompt(canonicalCwd, parsed.provider, memoryContext);
-      const approvalMode = resolveApprovalMode(parsed.provider);
+      const approvalMode = resolveApprovalMode(parsed.provider, state.allowAll);
 
       const tempSession = await tempClient.createSession({
         model: parsed.model,
@@ -2007,7 +2007,7 @@ export class TeleTopazService {
       const skillDirectories = state.provider === "copilot"
         ? await this.collectSkillDirectories(canonicalCwd)
         : undefined;
-      const approvalMode = resolveApprovalMode(state.provider);
+      const approvalMode = resolveApprovalMode(state.provider, state.allowAll);
 
       const models = await this.getModels(state.provider);
       const useModel = model ?? state.model ?? getDefaultModel(models);
