@@ -31,6 +31,8 @@ describe("sandbox profile", () => {
     expect(profile).toContain(`(allow file-write* (subpath "/tmp/claude-${uid}"))`);
     expect(profile).toContain('(allow file-write* (regex "^/private/tmp/claude-settings-"))');
     expect(profile).toContain('(allow file-write* (regex "^/tmp/claude-settings-"))');
+    expect(profile).toContain('(allow file-write* (regex "^/private/tmp/claude-[0-9a-f]+-cwd(/|$)"))');
+    expect(profile).toContain('(allow file-write* (regex "^/tmp/claude-[0-9a-f]+-cwd(/|$)"))');
     expect(profile).toContain(`(allow file-write* (subpath "${home}/.teletopaz"))`);
     expect(profile).toContain(`(allow file-write* (subpath "${home}/Library/Application Support/GitHub Copilot"))`);
     expect(profile).toContain(`(allow file-write* (subpath "${home}/.config/github-copilot"))`);
@@ -49,6 +51,20 @@ describe("sandbox profile", () => {
 
     expect(profile).toContain("(allow file-read* (subpath \"/dev/null\"))");
     expect(profile).toContain("(allow file-write* (subpath \"/dev/null\"))");
+  });
+
+  it("allows Claude Code CLI bash cwd temp directories", () => {
+    const profile = buildSandboxProfile({ workDir: "/tmp/test" });
+
+    // 有效的 cwd 模式（應被允許）
+    expect(profile).toContain('(allow file-write* (regex "^/private/tmp/claude-[0-9a-f]+-cwd(/|$)"))');
+    expect(profile).toContain('(allow file-write* (regex "^/tmp/claude-[0-9a-f]+-cwd(/|$)"))');
+
+    // 安全性確認：不應過度放寬（不允許用 subpath 直接放行整個 /tmp/claude）
+    expect(profile).not.toContain('(allow file-write* (subpath "/tmp/claude"))');
+
+    // 安全性確認：regex 應包含精確的尾部錨定
+    expect(profile).toMatch(/regex.*claude-\[0-9a-f\]\+-cwd/);
   });
 
   it("allows each TELETOPAZ_DIRECTORY_PATTERNS root without broadening to a shared ancestor", () => {
