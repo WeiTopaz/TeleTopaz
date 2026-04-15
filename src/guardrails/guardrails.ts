@@ -84,15 +84,14 @@ const SEMANTIC_TARGETS = [
   "api key",
   "apikey",
   "private key",
-  "ssh",
+  "ssh key",       // v3: ssh → ssh key（避免封鎖 "show ssh connection status"）
   "keychain",
   "env",
   "environment variable",
   "credential",
   "cookie",
   "session",
-  "/etc/passwd",
-  "/etc/shadow",
+  // v5 移除："/etc/passwd", "/etc/shadow"（\b 不相容路徑；builtin 已涵蓋）
   "密碼",
   "金鑰",
   "密鑰",
@@ -103,6 +102,79 @@ const SEMANTIC_TARGETS = [
   "金鑰圈",
   "憑據"
 ];
+
+// 偵測字串是否包含 CJK 字元（中日韓）
+const CJK_RANGE = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/;
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * 智慧分句：
+ * - 明確句號：! ? 。 ！ ？ \n 直接切
+ * - 英文句號 .：只在後接「空白+字母（[A-Za-z]）」或中文字元時才切
+ *   避免切割 config.json、v18.0.1、api.example.com
+ *
+ * v8 修正：evaluateSemantic 呼叫 normalizeText() 後再傳入（全小寫），
+ * 原 [A-Z] 永遠不匹配，改為 [A-Za-z]。
+ */
+function splitSentences(text: string): string[] {
+  return text
+    .split(/(?<=[!?。！？\n])\s*|(?<=\.)\s+(?=[A-Za-z\u4e00-\u9fff])/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * 判斷 word 是否出現在 text 中。
+ * - 英文：\b 詞邊界 + s? 複數容許
+ * - 中文：直接 includes()
+ * - 多詞短語（如 "api key"）：\b 包裹整體，中間空格自然匹配
+ */
+function matchesWord(text: string, word: string): boolean {
+  if (!word) return false;
+  if (CJK_RANGE.test(word)) {
+    return text.includes(word);
+  }
+  try {
+    return new RegExp(`\\b${escapeRegex(word)}s?\\b`, "i").test(text);
+  } catch {
+    return text.includes(word);
+  }
+}
+
+/**
+ * 安全語境表：target 出現在已知開發短語中時，豁免該 target 的封鎖。
+ * v5：移除 "env file"（攻擊繞過風險），新增 "env.example"、"env template"
+ * v6：移除 "env variable"，改為 "env variable type/syntax/docs"；
+ *      新增 "environment variable" 的安全語境
+ */
+const SAFE_TARGET_CONTEXTS: Record<string, readonly string[]> = {
+  "token":                ["token count", "token limit", "token usage", "token type", "token bucket", "token refresh", "csrf token", "token string"],
+  "session":              ["session middleware", "session timeout", "session storage", "session management", "session config", "session handler", "session pool"],
+  "env":                  ["env config", "env setup", "env example", "env.example", "env template",
+                           "env variable type", "env variable syntax", "env variable docs"],
+  "environment variable": ["environment variable type", "environment variable syntax",
+                           "environment variable config", "environment variable docs"],
+  "credential":           ["credential flow", "credential provider", "credential rotation", "credential store"],
+  "cookie":               ["cookie policy", "cookie banner", "cookie consent", "cookie parser", "cookie jar"],
+  "secret":               ["secret manager", "secret rotation", "secret store", "secret backend"],
+  "ssh key":              ["ssh key generation", "ssh key format", "ssh key pair"],
+};
+
+/**
+ * 檢查 target 是否出現在安全語境中。
+ * v7 修正：先將句中 target 複數形正規化為單數（鏡像 matchesWord 的 s? 行為），
+ * 使 "show tokens count" 能正確匹配 "token count" 安全語境。
+ */
+function isInSafeContext(sentence: string, target: string): boolean {
+  const contexts = SAFE_TARGET_CONTEXTS[target];
+  if (!contexts) return false;
+  const pluralTarget = escapeRegex(target) + "s";
+  const normalized = sentence.replace(new RegExp(`\\b${pluralTarget}\\b`, "i"), target);
+  return contexts.some((safe) => normalized.includes(safe));
+}
 
 function ruleMatches(rule: GuardrailRule, text: string): boolean {
   const lower = normalizeText(text);
@@ -139,15 +211,22 @@ function evaluateSemantic(prompt: string): GuardrailDecision | undefined {
     }
   }
 
-  const hasAction = SEMANTIC_ACTIONS.some((action) => action && lower.includes(action));
-  const hasTarget = SEMANTIC_TARGETS.some((target) => target && lower.includes(target));
-  if (hasAction && hasTarget) {
-    return {
-      allowed: false,
-      source: "semantic",
-      ruleId: "semantic_sensitive_request",
-      reason: "偵測到請求敏感資訊的意圖"
-    };
+  // Phase 2: action×target — 詞邊界 + 同句鄰近度 + 安全語境排除
+  const sentences = splitSentences(lower);
+  for (const sentence of sentences) {
+    const hasAction = SEMANTIC_ACTIONS.some((a) => matchesWord(sentence, a));
+    if (!hasAction) continue;
+
+    for (const target of SEMANTIC_TARGETS) {
+      if (!matchesWord(sentence, target)) continue;
+      if (isInSafeContext(sentence, target)) continue;
+      return {
+        allowed: false,
+        source: "semantic",
+        ruleId: "semantic_sensitive_request",
+        reason: "偵測到請求敏感資訊的意圖"
+      };
+    }
   }
 
   return undefined;
