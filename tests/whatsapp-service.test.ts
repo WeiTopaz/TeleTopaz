@@ -117,8 +117,8 @@ async function buildService(ownerJid = "886912345678") {
   const svc = new (WhatsAppService as unknown as new (opts: unknown) => MockService)({
     ownerJids: [ownerJid],
     authDir: "/tmp/wa-auth",
-    defaultModel: "claude-sonnet-4.6",
-    defaultProvider: "claude-code",
+    defaultModel: "gpt-5.4",
+    defaultProvider: "copilot",
     defaultWorkDir: "/tmp/project",
   });
 
@@ -131,15 +131,15 @@ async function buildService(ownerJid = "886912345678") {
 }
 
 function makeWaState(overrides: Partial<WaState> = {}): WaState {
-  return {
-    client: undefined,
-    session: undefined,
-    workDir: "/tmp/project",
-    model: "claude-sonnet-4.6",
-    provider: "claude-code",
-    mode: "manual",
-    routerModel: undefined,
-    coreModel: undefined,
+    return {
+      client: undefined,
+      session: undefined,
+      workDir: "/tmp/project",
+      model: "gpt-5.4",
+      provider: "copilot",
+      mode: "manual",
+      routerModel: undefined,
+      coreModel: undefined,
     processing: false,
     pendingTasks: [],
     lastPrompt: undefined,
@@ -253,7 +253,7 @@ describe("WhatsApp commands", () => {
     const { svc } = await buildService("886912345678");
     await svc.handleCommand("jid@s.whatsapp.net", "/info", dummyMsg);
     const msg = vi.mocked(svc.wa.sendMessage).mock.calls[0]?.[1] as string;
-    expect(msg).toContain("claude-sonnet-4.6");
+    expect(msg).toContain("gpt-5.4");
     expect(msg).toContain("未初始化");
   });
 
@@ -271,7 +271,7 @@ describe("WhatsApp commands", () => {
     const { svc } = await buildService("886912345678");
     await svc.handleCommand("jid", "/model", dummyMsg);
     const msg = vi.mocked(svc.wa.sendMessage).mock.calls[0]?.[1] as string;
-    expect(msg).toContain("claude-sonnet-4.6");
+    expect(msg).toContain("gpt-5.4");
   });
 
   it("/model with arg switches model", async () => {
@@ -282,6 +282,20 @@ describe("WhatsApp commands", () => {
     const state = svc.sessions.get("jid")!;
     expect(state.model).toBe("gpt-5.4");
     expect(state.mode).toBe("manual");
+  });
+
+  it("/router strips the provider prefix before creating the routed session", async () => {
+    const { svc, mockAiClient } = await buildService("886912345678");
+    svc.sessions.set("jid", makeWaState({ mode: "auto", routerModel: "cccli:claude-haiku-4.5" }));
+
+    await svc.handleCommand("jid", "/router 請幫我整理待辦", dummyMsg);
+
+    expect(mockAiClient.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "claude-haiku-4.5", approvalMode: "auto_edit" })
+    );
+    const state = svc.sessions.get("jid")!;
+    expect(state.provider).toBe("claude-code");
+    expect(state.model).toBe("claude-haiku-4.5");
   });
 
   it("/clear destroys session and confirms", async () => {

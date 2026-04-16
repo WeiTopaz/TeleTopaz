@@ -62,12 +62,17 @@ describe("model config", () => {
     expect(modelConfig.getDefaultModel(["gpt-5.4", "claude-opus-4.6"])).toBe("claude-opus-4.6");
   });
 
-  it("has DEFAULT_CORE_MODEL as claude-sonnet-4.6 under cccli", () => {
-    expect(modelConfig.DEFAULT_CORE_MODEL).toBe("claude-sonnet-4.6");
-    expect(modelConfig.DEFAULT_MODEL_ENTRY).toBe("cccli:claude-sonnet-4.6");
+  it("uses ctcli:gpt-5.4 as the default core model entry", () => {
+    expect(modelConfig.DEFAULT_CORE_MODEL).toBe("ctcli:gpt-5.4");
+    expect(modelConfig.DEFAULT_MODEL_ENTRY).toBe("ctcli:gpt-5.4");
   });
 
-  it("returns DEFAULT_CORE_MODEL when claude-sonnet-4.6 is in model list", () => {
-    expect(modelConfig.getDefaultModel(["claude-sonnet-4.6", "claude-opus-4.6"])).toBe("claude-sonnet-4.6");
+  it("uses provider:model entries for the default auto router/core pair", () => {
+    expect(modelConfig.DEFAULT_ROUTER_MODEL).toBe("ctcli:gpt-5-mini");
+    expect(modelConfig.DEFAULT_CORE_MODEL).toBe("ctcli:gpt-5.4");
+  });
+
+  it("returns gpt-5.4 when the default core model is in the list", () => {
+    expect(modelConfig.getDefaultModel(["gpt-5.4", "claude-opus-4.6"])).toBe("gpt-5.4");
   });
 });

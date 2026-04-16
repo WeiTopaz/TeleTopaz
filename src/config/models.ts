@@ -11,9 +11,12 @@ export type SupportedModel = {
   entry: `${CliProviderLabel}:${string}`;
 };
 
-export const DEFAULT_ROUTER_MODEL = "gpt-5-mini";
-export const DEFAULT_CORE_MODEL = "claude-sonnet-4.6";
-export const DEFAULT_MODEL_ENTRY = `cccli:${DEFAULT_CORE_MODEL}` as const;
+const DEFAULT_ROUTER_MODEL_NAME = "gpt-5-mini";
+const DEFAULT_CORE_MODEL_NAME = "gpt-5.4";
+
+export const DEFAULT_ROUTER_MODEL = `ctcli:${DEFAULT_ROUTER_MODEL_NAME}` as const;
+export const DEFAULT_CORE_MODEL = `ctcli:${DEFAULT_CORE_MODEL_NAME}` as const;
+export const DEFAULT_MODEL_ENTRY = DEFAULT_CORE_MODEL;
 
 const PROVIDER_TO_CLI: Record<ProviderType, CliProviderLabel> = {
   copilot: "ctcli",
@@ -105,13 +108,13 @@ export function getAllModels(): SupportedModel[] {
 }
 
 export function getDefaultModel(models: string[]): string | undefined {
-  if (models.includes(DEFAULT_CORE_MODEL)) return DEFAULT_CORE_MODEL;
-
   const override = process.env[DEFAULT_MODEL_ENV];
   if (override) {
     const parsed = parseModelEntry(override);
     if (models.includes(parsed.model)) return parsed.model;
   }
+
+  if (models.includes(DEFAULT_CORE_MODEL_NAME)) return DEFAULT_CORE_MODEL_NAME;
 
   return models[0];
 }

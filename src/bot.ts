@@ -12,7 +12,6 @@ import { redact } from "./util/redaction.js";
 import { markdownToTelegram, splitLongMessage } from "./util/markdown.js";
 import { formatChatDisplayName, formatJsonResult, parseIndex } from "./util/format.js";
 import { logger } from "./util/logger.js";
-import { parseFingerprints } from "./util/tls.js";
 import { CopilotSdkClient, normalizeModelInfos } from "./copilot/sdk.js";
 import { createProviderClient } from "./provider/factory.js";
 import { quotaService } from "./services/quota.js";
@@ -103,7 +102,7 @@ const SHORTCUT_BUTTONS: ShortcutConfig[] = [
     label: "📓 筆記",
     callbackKey: "notebook",
     targetDirName: "MyNotebook",
-    modelEntry: "cccli:claude-sonnet-4.6",
+    modelEntry: "ctcli:gpt-5-mini",
   },
 ];
 
@@ -334,8 +333,7 @@ export class TeleTopazService {
 
   static async create(): Promise<TeleTopazService> {
     const secrets = await loadSecrets();
-    const fingerprints = parseFingerprints(secrets.certificateFingerprints);
-    const api = new TelegramApi({ token: secrets.botToken, fingerprints });
+    const api = new TelegramApi({ token: secrets.botToken });
     return new TeleTopazService(api, secrets.ownerChatId, secrets.ownerUserId, Math.floor(Date.now() / 1000));
   }
 
@@ -499,12 +497,13 @@ export class TeleTopazService {
   }
 
   private async classifyIntent(chatId: number, text: string, routerModel: string): Promise<"ROUTER" | "CORE"> {
-    const providerType = this.resolveProviderForModel(routerModel);
+    const parsedRouterModel = parseConfiguredModelEntry(routerModel);
+    const providerType = parsedRouterModel.provider;
     try {
       const client = await this.getIntentClassifierClient(providerType);
       
       const session = await client.createSession({
-        model: routerModel,
+        model: parsedRouterModel.model,
         approvalMode: "plan",
         workingDirectory: APP_ROOT,
         systemPrompt: "You are an intent classifier. Determine if the user's request is simple (greetings, quick queries, simple docs, web search, casual chat) or complex (coding, reasoning, summarization, long writing, analysis, planning, structural decomposition). Never call tools. Return 'ROUTER' for simple and 'CORE' for complex. Return ONLY the label.",
@@ -669,17 +668,18 @@ export class TeleTopazService {
     // Auto mode: classify intent and switch provider/model accordingly
     if (state.mode === "auto" && state.routerModel && state.coreModel) {
       const intent = await this.classifyIntent(chatId, userText, state.routerModel);
-      const targetModel = intent === "ROUTER" ? state.routerModel : state.coreModel;
-      const targetProvider = this.resolveProviderForModel(targetModel);
+      const targetModelEntry = intent === "ROUTER" ? state.routerModel : state.coreModel;
+      const { provider: targetProvider, model: targetModel } = parseConfiguredModelEntry(targetModelEntry);
       
       if (!state.session || state.provider !== targetProvider || state.model !== targetModel) {
         logger.info("Auto routing", { intent, targetProvider, targetModel });
         if (state.provider !== targetProvider) {
           state.provider = targetProvider;
         }
-        state.model = targetModel;
         if (state.workDir) {
-          await this.createSession(chatId, state.workDir, targetModel);
+          await this.createSession(chatId, state.workDir, targetModelEntry);
+        } else {
+          state.model = targetModel;
         }
       }
     }
@@ -1459,7 +1459,7 @@ export class TeleTopazService {
       const selected = allModels[index];
       
       if (selected) {
-        state.routerModel = selected.model;
+        state.routerModel = selected.entry;
         await this.safeSend(chatId, `Router 模型已設定為：${selected.entry}`, undefined);
         // Return to main menu instead of chaining
         await this.sendUnifiedModelList(chatId);
@@ -1474,7 +1474,7 @@ export class TeleTopazService {
       const selected = allModels[index];
 
       if (selected) {
-        state.coreModel = selected.model;
+        state.coreModel = selected.entry;
         await this.safeSend(chatId, `Core 模型已設定為：${selected.entry}`, undefined);
         await this.sendUnifiedModelList(chatId);
       }
@@ -1532,7 +1532,7 @@ export class TeleTopazService {
       const globalIndex = allModels.indexOf(m);
       if (index % 1 === 0) keyboard.inline_keyboard.push([]);
       const row = keyboard.inline_keyboard[keyboard.inline_keyboard.length - 1]!;
-      const label = m.model === state.routerModel ? `🟢 ${m.entry}` : m.entry;
+      const label = normalizeConfiguredModelEntry(state.routerModel, "") === m.entry ? `🟢 ${m.entry}` : m.entry;
       row.push({ text: label, callback_data: `do.model:pick.router:${globalIndex}` });
     });
     
@@ -1550,7 +1550,7 @@ export class TeleTopazService {
       const globalIndex = allModels.indexOf(m);
       if (index % 1 === 0) keyboard.inline_keyboard.push([]);
       const row = keyboard.inline_keyboard[keyboard.inline_keyboard.length - 1]!;
-      const label = m.model === state.coreModel ? `🟢 ${m.entry}` : m.entry;
+      const label = normalizeConfiguredModelEntry(state.coreModel, "") === m.entry ? `🟢 ${m.entry}` : m.entry;
       row.push({ text: label, callback_data: `do.model:pick.core:${globalIndex}` });
     });
 
@@ -1971,6 +1971,10 @@ export class TeleTopazService {
     const canonicalCwd = await fs.realpath(cwd).catch(() => path.resolve(cwd));
 
     const state = this.getOrCreateState(chatId);
+    const parsedRequestedModel = model?.includes(":") ? parseConfiguredModelEntry(model) : undefined;
+    if (parsedRequestedModel && state.provider !== parsedRequestedModel.provider) {
+      state.provider = parsedRequestedModel.provider;
+    }
     if (state.session) {
       try {
         await state.session.destroy();
@@ -2010,7 +2014,7 @@ export class TeleTopazService {
       const approvalMode = resolveApprovalMode(state.provider, state.allowAll);
 
       const models = await this.getModels(state.provider);
-      const useModel = model ?? state.model ?? getDefaultModel(models);
+      const useModel = parsedRequestedModel?.model ?? model ?? state.model ?? getDefaultModel(models);
       if (!useModel) {
         throw new Error("未設定模型");
       }
@@ -2809,17 +2813,14 @@ export class TeleTopazService {
     return createProviderClient(provider);
   }
 
-  private resolveProviderForModel(model: string): ProviderType {
-    return parseConfiguredModelEntry(model).provider;
-  }
-
   private formatModelEntry(provider: ProviderType, model: string): string {
     return formatConfiguredModelEntry(provider, model);
   }
 
   private formatResolvedModelEntry(model: string | undefined): string {
     if (!model) return "未設定";
-    return this.formatModelEntry(this.resolveProviderForModel(model), model);
+    const parsed = parseConfiguredModelEntry(model);
+    return this.formatModelEntry(parsed.provider, parsed.model);
   }
 
   private formatStoredModelKey(model: string): string {
@@ -2832,7 +2833,7 @@ export class TeleTopazService {
   private formatStateModelLabel(state: AgentContext, manualModelOverride?: string): string {
     if (state.mode === "auto") {
       const activeModel = manualModelOverride ?? state.model;
-      const activePrefix = activeModel ? `目前:${this.formatResolvedModelEntry(activeModel)} / ` : "";
+      const activePrefix = activeModel ? `目前:${this.formatModelEntry(state.provider, activeModel)} / ` : "";
       return `Auto (${activePrefix}R:${this.formatResolvedModelEntry(state.routerModel)} / C:${this.formatResolvedModelEntry(state.coreModel)})`;
     }
     return this.formatModelEntry(state.provider, manualModelOverride ?? state.model ?? "未設定");
@@ -2840,7 +2841,7 @@ export class TeleTopazService {
 
   private formatActiveSource(state: AgentContext): string {
     if (state.mode === "auto") {
-      return state.model ? `Auto:${this.formatResolvedModelEntry(state.model)}` : "Auto:待路由";
+      return state.model ? `Auto:${this.formatModelEntry(state.provider, state.model)}` : "Auto:待路由";
     }
     return this.formatModelEntry(state.provider, state.model ?? "未設定");
   }

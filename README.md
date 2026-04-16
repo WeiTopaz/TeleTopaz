@@ -57,7 +57,6 @@ bot_token (required): 7123456789:AAF...
 owner_chat_id (required): 123456789
 owner_user_id (required): 123456789
 directory_patterns (optional): ~/Projects/*, ~/Documents/TempNote
-certificate_fingerprints (optional):          ← 留空跳過
 wa_owner_jids (optional):                     ← 留空跳過（WhatsApp 後續可再設定）
 ```
 
@@ -165,13 +164,12 @@ npm start
 | `TELETOPAZ_OWNER_CHAT_ID` | ✅ | Telegram 擁有者的 Chat ID |
 | `TELETOPAZ_OWNER_USER_ID` | ✅ | Telegram 擁有者的 User ID |
 | `TELETOPAZ_DIRECTORY_PATTERNS` | ✅ | 逗號分隔的 Glob 模式，定義可選工作區與沙盒可寫入根目錄 |
-| `TELETOPAZ_CERT_FINGERPRINTS` | — | 逗號分隔的 SHA-256 指紋（TLS pinning） |
 | `TELETOPAZ_DATA_DIR` | — | App data 目錄（預設 `~/.teletopaz`） |
 | `TELETOPAZ_LOG_LEVEL` | — | `debug` / `info` / `warn` / `error` |
 | `TELETOPAZ_LOG_DIR` | — | 日誌輸出目錄（預設 `./logs/`） |
 | `TELETOPAZ_WA_OWNER_JIDS` | — | WhatsApp 擁有者電話，逗號分隔（含國碼，無 `+`）；不設定則 WhatsApp 頻道不啟動 |
 | `TELETOPAZ_WA_AUTH_DIR` | — | WhatsApp 認證資料目錄（預設 `~/.teletopaz/whatsapp-auth`） |
-| `TELETOPAZ_WA_MODEL` | — | WhatsApp 頻道預設模型（格式同 `TELETOPAZ_DEFAULT_MODEL`，如 `cccli:claude-sonnet-4.6`） |
+| `TELETOPAZ_WA_MODEL` | — | WhatsApp 頻道預設模型（格式同 `TELETOPAZ_DEFAULT_MODEL`，如 `ctcli:gpt-5.4`） |
 
 > 所有欄位皆可由環境變數覆蓋。`npm run setup:secrets` 會將 Bot Token / Owner IDs / WA Owner JIDs 寫入 macOS Keychain。
 
@@ -194,16 +192,16 @@ npm start
 
 | Entry | 供應商 | 說明 |
 |---|---|---|
-| `ctcli:gpt-5.4` | GitHub Copilot | |
+| `ctcli:gpt-5.4` | GitHub Copilot | **預設 Core** |
 | `ctcli:gpt-5-mini` | GitHub Copilot | 輕量，適合 Router |
 | `ctcli:claude-opus-4.6` | GitHub Copilot | |
 | `ctcli:claude-sonnet-4.6` | GitHub Copilot | |
 | `gmcli:gemini-3.1-pro-preview` | Google Gemini | |
 | `cccli:claude-opus-4.6` | Claude Code CLI | |
-| `cccli:claude-sonnet-4.6` | Claude Code CLI | **預設** |
+| `cccli:claude-sonnet-4.6` | Claude Code CLI | |
 | `cccli:claude-haiku-4.5` | Claude Code CLI | 輕量 |
 
-> Auto Mode 預設以 `ctcli:gpt-5-mini` 作為 Router、`cccli:claude-sonnet-4.6` 作為 Core。
+> Auto Mode 預設以 `ctcli:gpt-5-mini` 作為 Router、`ctcli:gpt-5.4` 作為 Core。
 
 ---
 

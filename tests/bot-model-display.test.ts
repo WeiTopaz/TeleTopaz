@@ -48,8 +48,8 @@ describe("TeleTopazService model display", () => {
     }).getOrCreateState(1);
     state.mode = "auto";
     state.provider = "copilot";
-    state.routerModel = "gpt-5-mini";
-    state.coreModel = "gemini-3.1-pro-preview";
+    state.routerModel = "ctcli:gpt-5-mini";
+    state.coreModel = "gmcli:gemini-3.1-pro-preview";
     state.model = "gemini-3.1-pro-preview";
     (service as unknown as { safeSend: typeof safeSend }).safeSend = safeSend;
 

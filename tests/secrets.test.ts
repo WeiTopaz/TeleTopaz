@@ -20,8 +20,7 @@ describe("loadSecrets", () => {
       env: {},
       keytar: { getPassword },
       runtimeConfig: {
-        directoryPatterns: "/Users/test/Project/*",
-        certificateFingerprints: "sha256/runtime"
+        directoryPatterns: "/Users/test/Project/*"
       }
     });
 
@@ -29,8 +28,7 @@ describe("loadSecrets", () => {
       botToken: "telegram-token",
       ownerChatId: "123",
       ownerUserId: "456",
-      directoryPatterns: "/Users/test/Project/*",
-      certificateFingerprints: "sha256/runtime"
+      directoryPatterns: "/Users/test/Project/*"
     });
     // runtimeConfig 直接注入時，keychain 僅被呼叫 3 次（三個必要 secrets）
     expect(getPassword).toHaveBeenCalledTimes(3);
@@ -47,8 +45,7 @@ describe("loadSecrets", () => {
       } as NodeJS.ProcessEnv,
       keytar: { getPassword },
       runtimeConfig: {
-        directoryPatterns: undefined,
-        certificateFingerprints: undefined
+        directoryPatterns: undefined
       }
     });
 

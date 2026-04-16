@@ -36,9 +36,9 @@
         ╱ ╲
        ╱ E2E ╲         （尚未建立）
       ╱───────╲
-     ╱ 整合測試  ╲       35 個測試檔案
+     ╱ 整合測試  ╲       52 個測試檔案
     ╱─────────────╲
-   ╱   單元測試     ╲    35 個測試檔案（含整合特性）
+   ╱   單元測試     ╲    52 個測試檔案（含整合特性）
   ╱─────────────────╲
 ```
 
@@ -542,11 +542,10 @@
 
 | 模組 | 檔案 | 嚴重程度 | 說明 |
 |------|------|----------|------|
-| Telegram API 封裝 | `src/telegram/api.ts` | 🔴 高 | 所有 Bot API 呼叫的基礎，含 TLS pinning、錯誤處理、格式降級 |
+| Telegram API 封裝 | `src/telegram/api.ts` | 🔴 高 | 所有 Bot API 呼叫的基礎，含錯誤處理、格式降級 |
 | PTY 模組 | `src/pty/*.ts` | 🔴 高 | 新增的偽終端機驅動模組，含 runner/ansi-parser/completion-detector/human-typist 等 |
 | Gemini PTY 工作階段 | `src/gemini/pty-session.ts` | 🔴 高 | 新供應商實作，尚無任何測試 |
 | 用量追蹤 | `src/services/quota.ts` | 🟡 中 | 配額檢查、用量記錄、跨日統計 |
-| TLS 憑證釘選 | `src/util/tls.ts` | 🟡 中 | 指紋解析、憑證驗證 |
 | 圖片處理 | `src/util/images.ts` | 🟡 中 | sharp 重新編碼、EXIF 旋轉 |
 | App Data 目錄 | `src/util/app-data.ts` | 🟢 低 | 路徑解析邏輯簡單 |
 | 會話圖示 | `src/session/emoji.ts` | 🟢 低 | 圖示池選取邏輯簡單 |
@@ -589,7 +588,7 @@ src/sandbox*.ts        ████████████████░░░
 src/config/            ██████████████████░░  90%  (13 案例)
 src/session/           ██████████████░░░░░░  70%  (9 案例，缺 emoji)
 src/restart.ts         ████████████████░░░░  80%  (4 案例，缺 getGitInfo/performGitRollback)
-src/util/              ████████████████░░░░  80%  (28 案例，缺 tls/images)
+src/util/              ████████████████░░░░  80%  (28 案例，缺 images)
 src/telegram/          ░░░░░░░░░░░░░░░░░░░░   0%  ⚠️
 src/services/          ░░░░░░░░░░░░░░░░░░░░   0%  ⚠️
 ```
@@ -607,28 +606,27 @@ src/services/          ░░░░░░░░░░░░░░░░░░░
 | ID | 測試檔案 | 測試目標 | 建議案例數 |
 |----|----------|----------|-----------|
 | T01 | `telegram-api.test.ts` | `TelegramApi` 封裝 | 10–12 |
-| T02 | `tls.test.ts` | TLS 憑證釘選 | 5–6 |
-| T03 | `bot-event-dispatch.test.ts` | 事件分發流程 | 6–8 |
+| T02 | `bot-event-dispatch.test.ts` | 事件分發流程 | 6–8 |
 
 #### 🟡 P1 — 中優先（功能完整性）
 
 | ID | 測試檔案 | 測試目標 | 建議案例數 |
 |----|----------|----------|-----------|
-| T04 | `quota.test.ts` | 用量追蹤 | 5–6 |
-| T05 | `bot-commands.test.ts` | 指令處理 | 6–8 |
-| T06 | `bot-image-handling.test.ts` | 圖片附件處理 | 4–5 |
-| T07 | `bot-send-format.test.ts` | 訊息傳送與格式降級 | 4–5 |
-| T08 | `gemini-retry.test.ts` | Gemini 重試與逾時 | 4–5 |
+| T03 | `quota.test.ts` | 用量追蹤 | 5–6 |
+| T04 | `bot-commands.test.ts` | 指令處理 | 6–8 |
+| T05 | `bot-image-handling.test.ts` | 圖片附件處理 | 4–5 |
+| T06 | `bot-send-format.test.ts` | 訊息傳送與格式降級 | 4–5 |
+| T07 | `gemini-retry.test.ts` | Gemini 重試與逾時 | 4–5 |
 
 #### 🟢 P2 — 低優先（輔助功能）
 
 | ID | 測試檔案 | 測試目標 | 建議案例數 |
 |----|----------|----------|-----------|
-| T09 | `images.test.ts` | `reencodePhoto()` | 3–4 |
-| T10 | `emoji.test.ts` | 會話圖示選取 | 2–3 |
-| T11 | `app-data.test.ts` | App Data 路徑解析 | 2–3 |
-| T12 | `bot-shutdown.test.ts` | 關閉流程 | 3–4 |
-| T13 | `redaction-recursive.test.ts` | 遞迴遮蔽 | 3–4 |
+| T08 | `images.test.ts` | `reencodePhoto()` | 3–4 |
+| T09 | `emoji.test.ts` | 會話圖示選取 | 2–3 |
+| T10 | `app-data.test.ts` | App Data 路徑解析 | 2–3 |
+| T11 | `bot-shutdown.test.ts` | 關閉流程 | 3–4 |
+| T12 | `redaction-recursive.test.ts` | 遞迴遮蔽 | 3–4 |
 
 ### 5.2 詳細測試案例設計
 
@@ -646,27 +644,10 @@ describe("TelegramApi")
   ├── "getFile returns file metadata"
   ├── "getChat returns chat info with available_reactions"
   ├── "downloadFile enforces maxBytes limit"
-  ├── "applies TLS certificate pinning"
   └── "throws on non-ok API response"
 ```
 
 **Mock 策略**：使用 `vi.mock("node:https")` 或 `vi.mock("node:http")` 模擬 HTTP 回應。
-
----
-
-#### T02: `tls.test.ts` — TLS 憑證釘選 🔴
-
-```
-describe("TLS utilities")
-  ├── "normalizeFingerprint removes non-hex and uppercases"
-  ├── "parseFingerprints splits comma-separated values"
-  ├── "parseFingerprints returns empty for undefined"
-  ├── "buildCheckServerIdentity rejects wrong hostname"
-  ├── "buildCheckServerIdentity accepts matching fingerprint"
-  └── "buildCheckServerIdentity rejects non-matching fingerprint"
-```
-
-**Mock 策略**：建構假的 `PeerCertificate` 物件。
 
 ---
 

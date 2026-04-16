@@ -117,10 +117,9 @@ TeleTopaz/
 │       ├── format.ts         # 顯示格式化
 │       ├── markdown.ts       # Markdown → Telegram 轉換
 │       ├── redaction.ts      # 敏感資料遮蔽
-│       ├── tls.ts            # TLS 憑證釘選
 │       ├── images.ts         # 圖片處理
 │       └── app-data.ts       # App Data 目錄解析
-├── tests/                    # 35 個測試檔案
+├── tests/                    # 52 個測試檔案
 ├── scripts/
 │   ├── launcher.js           # 熱重啟 Launcher
 │   └── setup-secrets.ts      # 密鑰設定精靈
@@ -184,7 +183,7 @@ graph TB
     end
 
     TG_USER <-->|訊息 / 回調| TG_API_EXT
-    TG_API_EXT <-->|Long Polling<br/>TLS Pinning| TG_WRAP
+    TG_API_EXT <-->|Long Polling<br/>HTTPS| TG_WRAP
 
     LAUNCHER -->|spawn / 監控 exit code| INDEX
     INDEX --> SANDBOX
@@ -315,7 +314,6 @@ graph LR
     session/memory-store --> util/app-data
     session/persona --> util/logger
 
-    telegram/api --> util/tls
     telegram/api --> telegram/types
 
     config/secrets --> config/runtime-config
@@ -1410,30 +1408,26 @@ flowchart TD
 
 ```mermaid
 graph TB
-    subgraph L1 ["第 1 層：傳輸安全"]
-        TLS["TLS 憑證釘選<br/>(SHA-256 指紋)"]
-    end
-
-    subgraph L2 ["第 2 層：執行環境隔離"]
+    subgraph L1 ["第 1 層：執行環境隔離"]
         SANDBOX["macOS sandbox-exec<br/>檔案系統存取控制"]
     end
 
-    subgraph L3 ["第 3 層：內容過濾"]
+    subgraph L2 ["第 2 層：內容過濾"]
         GUARD["護欄引擎<br/>(內建 + 自訂規則 + 語意分析)"]
     end
 
-    subgraph L4 ["第 4 層：存取控制"]
+    subgraph L3 ["第 3 層：存取控制"]
         PATH["路徑限制<br/>(工作區邊界 + 敏感檔案)"]
         TOOL["工具權限<br/>(互動式批准)"]
         OWNER["擁有者驗證<br/>(唯一使用者)"]
     end
 
-    subgraph L5 ["第 5 層：輸出安全"]
+    subgraph L4 ["第 4 層：輸出安全"]
         REDACT["敏感資料遮蔽<br/>(Redaction)"]
         GUARD_OUT["工具輸出護欄"]
     end
 
-    L1 --> L2 --> L3 --> L4 --> L5
+    L1 --> L2 --> L3 --> L4
 ```
 
 ### 9.2 沙盒 (`src/sandbox.ts` + `src/sandbox-profile.ts`)
@@ -1727,7 +1721,7 @@ flowchart TD
 #### 建構子
 
 ```typescript
-constructor(options: { token: string; fingerprints: string[] })
+constructor(options: { token: string })
 ```
 
 #### API 方法
@@ -1750,29 +1744,7 @@ constructor(options: { token: string; fingerprints: string[] })
 |------|------|
 | `getTelegramHost()` | 回傳 Telegram API 主機名稱 `"api.telegram.org"` |
 
-### 10.2 TLS 憑證釘選 (`src/util/tls.ts`)
-
-#### 匯出函式
-
-| 函式 | 說明 |
-|------|------|
-| `normalizeFingerprint(input)` | 移除非十六進位字元並轉大寫 |
-| `parseFingerprints(input?)` | 逗號分隔拆分並正規化每個指紋 |
-| `buildCheckServerIdentity(expectedHost, fingerprints)` | 建構 TLS 驗證回調 |
-
-```typescript
-function buildCheckServerIdentity(
-  expectedHost: string,
-  fingerprints: string[]
-): (host: string, cert: PeerCertificate) => Error | undefined
-```
-
-驗證流程：
-1. 檢查主機名稱匹配
-2. 驗證 X.509 憑證鏈
-3. 若有設定指紋，驗證 SHA-256 指紋
-
-### 10.3 Markdown 轉換 (`src/util/markdown.ts`)
+### 10.2 Markdown 轉換 (`src/util/markdown.ts`)
 
 #### `markdownToTelegram(text)`
 
@@ -1908,7 +1880,6 @@ type MessageReaction = {
 | `TELETOPAZ_OWNER_CHAT_ID` | ✅ | 擁有者的 Chat ID | — |
 | `TELETOPAZ_OWNER_USER_ID` | ✅ | 擁有者的 User ID | — |
 | `TELETOPAZ_DIRECTORY_PATTERNS` | ✅ | 逗號分隔的 Glob 模式 | — |
-| `TELETOPAZ_CERT_FINGERPRINTS` | — | SHA-256 指紋（TLS pinning） | — |
 | `TELETOPAZ_DATA_DIR` | — | App Data 目錄 | `~/.teletopaz` |
 | `TELETOPAZ_LOG_LEVEL` | — | 日誌等級 | `info` |
 | `TELETOPAZ_LOG_DIR` | — | 日誌輸出目錄 | `logs/` |
@@ -1985,7 +1956,6 @@ type SecretKeys = {
   ownerChatId: string
   ownerUserId: string
   directoryPatterns: string | undefined
-  certificateFingerprints: string | undefined
 }
 ```
 
@@ -2005,7 +1975,6 @@ type SecretKeys = {
 ```typescript
 type RuntimeConfig = {
   directoryPatterns: string | undefined
-  certificateFingerprints: string | undefined
 }
 ```
 
@@ -2166,9 +2135,9 @@ function stripAttachmentContext(prompt: string): string
 | `TOOL_CONFIRM_TIMEOUT_MS` | 120,000 (2 分鐘) | 使用者批准逾時 |
 | `CLI_TIMEOUT_MS` (Gemini) | 120,000 (2 分鐘) | Gemini CLI 呼叫逾時 |
 | `POLLING_ERROR_DEDUPE_WINDOW_MS` | 15,000 (15 秒) | 錯誤去重複時間窗口 |
-| `DEFAULT_ROUTER_MODEL` | `gpt-5-mini` | Auto Mode 預設 Router |
-| `DEFAULT_CORE_MODEL` | `claude-sonnet-4.6` | Auto Mode 預設 Core |
-| `DEFAULT_MODEL_ENTRY` | `cccli:claude-sonnet-4.6` | 預設模型條目 |
+| `DEFAULT_ROUTER_MODEL` | `ctcli:gpt-5-mini` | Auto Mode 預設 Router |
+| `DEFAULT_CORE_MODEL` | `ctcli:gpt-5.4` | Auto Mode 預設 Core |
+| `DEFAULT_MODEL_ENTRY` | `ctcli:gpt-5.4` | 預設模型條目 |
 | `DEFAULT_MAX_ENTRIES` (記憶) | 24 | 持久化記憶最大筆數 |
 | `DEFAULT_MAX_CHARS` (記憶) | 400 | 每筆記憶最大字元數 |
 | `modelsTtlMs` | 300,000 (5 分鐘) | 模型快取 TTL |

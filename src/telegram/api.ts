@@ -1,6 +1,5 @@
 import https from "node:https";
 import { URL } from "node:url";
-import { buildCheckServerIdentity } from "../util/tls.js";
 import {
   InlineKeyboardMarkup,
   MessageReaction,
@@ -17,7 +16,6 @@ const DOWNLOAD_TIMEOUT_MS = 60_000;
 
 export type TelegramApiOptions = {
   token: string;
-  fingerprints: string[];
 };
 
 export class TelegramApi {
@@ -27,7 +25,6 @@ export class TelegramApi {
   constructor(options: TelegramApiOptions) {
     this.token = options.token;
     this.agent = new https.Agent({
-      checkServerIdentity: buildCheckServerIdentity(TELEGRAM_HOST, options.fingerprints),
       // Happy Eyeballs: 同時嘗試 IPv4/IPv6，自動選擇較快的連線
       autoSelectFamily: true,
       autoSelectFamilyAttemptTimeout: 2000,

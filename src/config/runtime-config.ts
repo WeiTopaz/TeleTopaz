@@ -6,7 +6,6 @@ const RUNTIME_CONFIG_FILE = "runtime-config.json";
 
 export type RuntimeConfig = {
   directoryPatterns: string | undefined;
-  certificateFingerprints: string | undefined;
 };
 
 type RuntimeConfigOptions = {
@@ -17,7 +16,6 @@ type RuntimeConfigOptions = {
 
 type RuntimeConfigFile = {
   directoryPatterns?: unknown;
-  certificateFingerprints?: unknown;
 };
 
 function coerceOptionalString(value: string | null | undefined): string | undefined {
@@ -28,27 +26,25 @@ function coerceOptionalString(value: string | null | undefined): string | undefi
 
 function normalizeRuntimeConfig(config: RuntimeConfig): RuntimeConfig {
   return {
-    directoryPatterns: coerceOptionalString(config.directoryPatterns),
-    certificateFingerprints: coerceOptionalString(config.certificateFingerprints)
+    directoryPatterns: coerceOptionalString(config.directoryPatterns)
   };
 }
 
 function mergeRuntimeConfig(primary: RuntimeConfig, fallback: RuntimeConfig): RuntimeConfig {
   return normalizeRuntimeConfig({
-    directoryPatterns: primary.directoryPatterns ?? fallback.directoryPatterns,
-    certificateFingerprints: primary.certificateFingerprints ?? fallback.certificateFingerprints
+    directoryPatterns: primary.directoryPatterns ?? fallback.directoryPatterns
   });
 }
 
 function parseRuntimeConfigFile(raw: string): RuntimeConfig {
-  const parsed = JSON.parse(raw) as RuntimeConfigFile;
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object") {
+    return { directoryPatterns: undefined };
+  }
+  const obj = parsed as RuntimeConfigFile;
   return {
     directoryPatterns:
-      typeof parsed.directoryPatterns === "string" ? coerceOptionalString(parsed.directoryPatterns) : undefined,
-    certificateFingerprints:
-      typeof parsed.certificateFingerprints === "string"
-        ? coerceOptionalString(parsed.certificateFingerprints)
-        : undefined
+      typeof obj.directoryPatterns === "string" ? coerceOptionalString(obj.directoryPatterns) : undefined
   };
 }
 
@@ -64,8 +60,7 @@ export async function loadRuntimeConfig(options: RuntimeConfigOptions = {}): Pro
   const configPath = getRuntimeConfigPath(options);
 
   let storedConfig: RuntimeConfig = {
-    directoryPatterns: undefined,
-    certificateFingerprints: undefined
+    directoryPatterns: undefined
   };
   try {
     const raw = await fs.readFile(configPath, "utf8");
@@ -78,17 +73,11 @@ export async function loadRuntimeConfig(options: RuntimeConfigOptions = {}): Pro
   }
 
   let effectiveStoredConfig = storedConfig;
-  if (
-    legacyConfigLoader &&
-    (!storedConfig.directoryPatterns || !storedConfig.certificateFingerprints)
-  ) {
+  if (legacyConfigLoader && !storedConfig.directoryPatterns) {
     const legacyConfig = normalizeRuntimeConfig(await legacyConfigLoader());
     const migratedStoredConfig = mergeRuntimeConfig(storedConfig, legacyConfig);
 
-    if (
-      migratedStoredConfig.directoryPatterns !== storedConfig.directoryPatterns ||
-      migratedStoredConfig.certificateFingerprints !== storedConfig.certificateFingerprints
-    ) {
+    if (migratedStoredConfig.directoryPatterns !== storedConfig.directoryPatterns) {
       await saveRuntimeConfig(migratedStoredConfig, { env, baseDir: options.baseDir });
     }
 
@@ -96,9 +85,7 @@ export async function loadRuntimeConfig(options: RuntimeConfigOptions = {}): Pro
   }
 
   return normalizeRuntimeConfig({
-    directoryPatterns: coerceOptionalString(env.TELETOPAZ_DIRECTORY_PATTERNS) ?? effectiveStoredConfig.directoryPatterns,
-    certificateFingerprints:
-      coerceOptionalString(env.TELETOPAZ_CERT_FINGERPRINTS) ?? effectiveStoredConfig.certificateFingerprints
+    directoryPatterns: coerceOptionalString(env.TELETOPAZ_DIRECTORY_PATTERNS) ?? effectiveStoredConfig.directoryPatterns
   });
 }
 
@@ -106,7 +93,7 @@ export async function saveRuntimeConfig(config: RuntimeConfig, options: RuntimeC
   const configPath = getRuntimeConfigPath(options);
   const normalized = normalizeRuntimeConfig(config);
 
-  if (!normalized.directoryPatterns && !normalized.certificateFingerprints) {
+  if (!normalized.directoryPatterns) {
     await fs.rm(configPath, { force: true });
     return;
   }

@@ -10,11 +10,6 @@ vi.mock("node:https", () => ({
   },
 }));
 
-vi.mock("../src/util/tls.js", () => ({
-  buildCheckServerIdentity: vi.fn().mockReturnValue(() => undefined),
-  parseFingerprints: vi.fn().mockReturnValue([]),
-}));
-
 import { TelegramApi } from "../src/telegram/api.js";
 
 const mockRequest = vi.mocked(https.request);
@@ -60,7 +55,7 @@ function fakeDownloadRequest(chunks: Buffer[], statusCode = 200) {
 }
 
 function createApi() {
-  return new TelegramApi({ token: "123456:fake_token", fingerprints: [] });
+  return new TelegramApi({ token: "123456:fake_token" });
 }
 
 describe("TelegramApi", () => {
@@ -165,10 +160,10 @@ describe("TelegramApi", () => {
     await expect(createApi().downloadFile("photos/file.jpg", 50)).rejects.toThrow("size limit");
   });
 
-  it("applies TLS certificate pinning via Agent constructor", () => {
-    new TelegramApi({ token: "123456:tok", fingerprints: ["AABBCCDD"] });
+  it("configures the HTTPS agent with Happy Eyeballs options", () => {
+    new TelegramApi({ token: "123456:tok" });
     expect(MockAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ checkServerIdentity: expect.any(Function) })
+      expect.objectContaining({ autoSelectFamily: true, autoSelectFamilyAttemptTimeout: 2000 })
     );
   });
 });

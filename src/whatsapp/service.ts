@@ -6,7 +6,7 @@
  *                               範例: "886912345678,886987654321"
  *                               或完整 JID: "886912345678@s.whatsapp.net"
  *   TELETOPAZ_WA_AUTH_DIR    – 認證資料目錄（預設: ~/.teletopaz/whatsapp-auth）
- *   TELETOPAZ_WA_MODEL       – 預設模型（同 TELETOPAZ_DEFAULT_MODEL 格式，如 cccli:claude-sonnet-4.6）
+ *   TELETOPAZ_WA_MODEL       – 預設模型（同 TELETOPAZ_DEFAULT_MODEL 格式，如 ctcli:gpt-5.4）
  *
  * 所有工具操作預設自動核准（擁有者身份已透過手機掃碼驗證）。
  * 可透過 /allowall 指令切換手動確認模式（WhatsApp 版僅記錄，無互動按鈕）。
@@ -23,7 +23,12 @@ import { SessionMemoryStore } from "../session/memory-store.js";
 import { buildPersonaPrompt } from "../session/persona.js";
 import { loadConfiguredRuntimeConfig, loadWaOwnerJids } from "../config/secrets.js";
 import { loadDirectoryPatterns, expandDirectoryPatterns } from "../config/directories.js";
-import { DEFAULT_MODEL_ENTRY, parseModelEntry } from "../config/models.js";
+import {
+  DEFAULT_MODEL_ENTRY,
+  formatModelEntry as formatConfiguredModelEntry,
+  normalizeModelEntry,
+  parseModelEntry
+} from "../config/models.js";
 import { logger } from "../util/logger.js";
 import { redact } from "../util/redaction.js";
 import {
@@ -55,6 +60,19 @@ function resolveApprovalMode(p: ProviderType): "plan" | "auto_edit" | undefined 
   if (p === "gemini") return "plan";
   if (p === "claude-code") return "auto_edit";
   return undefined;
+}
+
+function formatStoredModelEntry(model: string | undefined, provider?: ProviderType): string {
+  if (!model) return "未設定";
+  if (model.includes(":")) {
+    const parsed = parseModelEntry(model);
+    return formatConfiguredModelEntry(parsed.provider, parsed.model);
+  }
+  if (provider) {
+    return formatConfiguredModelEntry(provider, model);
+  }
+  const parsed = parseModelEntry(model);
+  return formatConfiguredModelEntry(parsed.provider, parsed.model);
 }
 
 /** Stable numeric hash of a JID string, used as chatId for SessionMemoryStore. */
@@ -289,8 +307,8 @@ export class WhatsAppService {
         const state = this.sessions.get(jid);
         if (!arg1) {
           const modeStr = state?.mode === "auto"
-            ? `Auto (router: ${state.routerModel ?? "未設定"} / core: ${state.coreModel ?? "未設定"})`
-            : state?.model ?? this.defaultModel;
+            ? `Auto (router: ${formatStoredModelEntry(state.routerModel)} / core: ${formatStoredModelEntry(state.coreModel)})`
+            : formatStoredModelEntry(state?.model ?? this.defaultModel, state?.provider ?? this.defaultProvider);
           await this.send(jid, `目前模型：${modeStr}`);
           return;
         }
@@ -301,17 +319,35 @@ export class WhatsAppService {
           }
         }
         if (arg1 === "config_router") {
+          if (!parts[2]) {
+            await this.send(jid, "用法：/model config_router <provider:model>");
+            return;
+          }
           const s = this.getOrCreateState(jid);
-          s.routerModel = parts[2];
+          const normalized = normalizeModelEntry(parts[2], "__invalid__");
+          if (normalized === "__invalid__") {
+            await this.send(jid, `❌ 無效的 Router 模型：${parts[2]}`);
+            return;
+          }
+          s.routerModel = normalized;
           s.mode = "auto";
-          await this.send(jid, `✅ Router 模型設為 ${parts[2]}`);
+          await this.send(jid, `✅ Router 模型設為 ${normalized}`);
           return;
         }
         if (arg1 === "config_core") {
+          if (!parts[2]) {
+            await this.send(jid, "用法：/model config_core <provider:model>");
+            return;
+          }
           const s = this.getOrCreateState(jid);
-          s.coreModel = parts[2];
+          const normalized = normalizeModelEntry(parts[2], "__invalid__");
+          if (normalized === "__invalid__") {
+            await this.send(jid, `❌ 無效的 Core 模型：${parts[2]}`);
+            return;
+          }
+          s.coreModel = normalized;
           s.mode = "auto";
-          await this.send(jid, `✅ Core 模型設為 ${parts[2]}`);
+          await this.send(jid, `✅ Core 模型設為 ${normalized}`);
           return;
         }
         // Switch to manual model
@@ -359,8 +395,8 @@ export class WhatsAppService {
       case "/info": {
         const state = this.sessions.get(jid);
         const modeStr = state?.mode === "auto"
-          ? `Auto (router: ${state.routerModel ?? "?"} / core: ${state.coreModel ?? "?"})`
-          : state?.model ?? this.defaultModel;
+          ? `Auto (router: ${formatStoredModelEntry(state.routerModel)} / core: ${formatStoredModelEntry(state.coreModel)})`
+          : formatStoredModelEntry(state?.model ?? this.defaultModel, state?.provider ?? this.defaultProvider);
         const info = state
           ? [
               `📂 ${path.basename(state.workDir)}`,
@@ -370,7 +406,7 @@ export class WhatsAppService {
               `🔇 靜默模式：${state.silentMode ? "開啟" : "關閉"}`,
               `🛡️ 自動批准：${state.allowAll ? "開啟" : "關閉"}`,
             ].join("\n")
-          : `🤖 ${this.defaultModel}\n🔌 未初始化`;
+          : `🤖 ${formatStoredModelEntry(this.defaultModel, this.defaultProvider)}\n🔌 未初始化`;
         await this.send(jid, info);
         return;
       }
@@ -561,8 +597,11 @@ export class WhatsAppService {
     }
 
     // If model override, switch model temporarily
-    if (overrideModel && overrideModel !== state.model) {
+    if (overrideModel) {
       const parsed = parseModelEntry(overrideModel);
+      if (state.session && (state.model !== parsed.model || state.provider !== parsed.provider)) {
+        await this.clearSession(jid);
+      }
       if (!state.session) {
         state.model = parsed.model;
         state.provider = parsed.provider;
@@ -609,12 +648,12 @@ export class WhatsAppService {
   // ─── Auto Mode ────────────────────────────────────────────────────────────
 
   private async classifyIntent(jid: string, text: string, routerModel: string): Promise<"ROUTER" | "CORE"> {
-    const { provider } = parseModelEntry(routerModel);
+    const { provider, model } = parseModelEntry(routerModel);
     const client = createProviderClient(provider);
     try {
       await client.start();
       const session = await client.createSession({
-        model: routerModel,
+        model,
         approvalMode: "plan",
         workingDirectory: process.cwd(),
         systemPrompt:

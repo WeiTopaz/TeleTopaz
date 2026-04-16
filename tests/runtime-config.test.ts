@@ -18,23 +18,20 @@ describe("runtime config", () => {
 
     await saveRuntimeConfig(
       {
-        directoryPatterns: "/Users/test/Project/*",
-        certificateFingerprints: "sha256/example"
+        directoryPatterns: "/Users/test/Project/*"
       },
       { baseDir: tempDir }
     );
 
     const loaded = await loadRuntimeConfig({ env: {}, baseDir: tempDir });
     expect(loaded).toEqual({
-      directoryPatterns: "/Users/test/Project/*",
-      certificateFingerprints: "sha256/example"
+      directoryPatterns: "/Users/test/Project/*"
     });
 
     const configPath = getRuntimeConfigPath({ baseDir: tempDir });
     const raw = JSON.parse(await fs.readFile(configPath, "utf8")) as Record<string, string>;
     expect(raw).toEqual({
-      directoryPatterns: "/Users/test/Project/*",
-      certificateFingerprints: "sha256/example"
+      directoryPatterns: "/Users/test/Project/*"
     });
   });
 
@@ -43,23 +40,20 @@ describe("runtime config", () => {
 
     await saveRuntimeConfig(
       {
-        directoryPatterns: "/Users/test/Stored/*",
-        certificateFingerprints: "sha256/stored"
+        directoryPatterns: "/Users/test/Stored/*"
       },
       { baseDir: tempDir }
     );
 
     const loaded = await loadRuntimeConfig({
       env: {
-        TELETOPAZ_DIRECTORY_PATTERNS: "/Users/test/Env/*",
-        TELETOPAZ_CERT_FINGERPRINTS: "sha256/env"
+        TELETOPAZ_DIRECTORY_PATTERNS: "/Users/test/Env/*"
       } as NodeJS.ProcessEnv,
       baseDir: tempDir
     });
 
     expect(loaded).toEqual({
-      directoryPatterns: "/Users/test/Env/*",
-      certificateFingerprints: "sha256/env"
+      directoryPatterns: "/Users/test/Env/*"
     });
   });
 
@@ -70,15 +64,33 @@ describe("runtime config", () => {
       env: {},
       baseDir: tempDir,
       legacyConfigLoader: async () => ({
-        directoryPatterns: "/Users/test/Legacy/*",
-        certificateFingerprints: "sha256/legacy"
+        directoryPatterns: "/Users/test/Legacy/*"
       })
     });
 
     expect(loaded).toEqual({
-      directoryPatterns: "/Users/test/Legacy/*",
-      certificateFingerprints: "sha256/legacy"
+      directoryPatterns: "/Users/test/Legacy/*"
     });
     expect(await loadRuntimeConfig({ env: {}, baseDir: tempDir })).toEqual(loaded);
+  });
+
+  it("ignores legacy certificate fingerprint fields in stored config files", async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "teletopaz-runtime-config-"));
+    const configPath = getRuntimeConfigPath({ baseDir: tempDir });
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({
+        directoryPatterns: "/Users/test/Project/*",
+        certificateFingerprints: "sha256/old"
+      })}\n`,
+      "utf8"
+    );
+
+    const loaded = await loadRuntimeConfig({ env: {}, baseDir: tempDir });
+
+    expect(loaded).toEqual({
+      directoryPatterns: "/Users/test/Project/*"
+    });
   });
 });

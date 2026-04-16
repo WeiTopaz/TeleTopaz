@@ -161,6 +161,39 @@ describe("TeleTopazService session memory", () => {
     expect(options?.approvalMode).toBe("auto_edit");
   });
 
+  it("accepts provider:model entries when creating sessions", async () => {
+    const api = createApi();
+    const session: AiSession = {
+      onEvent: vi.fn(),
+      send: vi.fn().mockResolvedValue(undefined),
+      sendAndWait: vi.fn().mockResolvedValue(undefined),
+      destroy: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined)
+    };
+    const client = createClient(session);
+    const service = new TeleTopazService(api, "1", "1", 0);
+    const state = (service as unknown as {
+      getOrCreateState: (chatId: number) => Record<string, unknown>;
+    }).getOrCreateState(1);
+
+    (service as unknown as { loadAllowedDirectories: () => Promise<string[]> }).loadAllowedDirectories = vi.fn().mockResolvedValue(["/tmp/project"]);
+    (service as unknown as { createProviderClient: () => AiClient }).createProviderClient = vi.fn().mockReturnValue(client);
+    (service as unknown as { safeSend: () => Promise<undefined> }).safeSend = vi.fn().mockResolvedValue(undefined);
+    (service as unknown as { sessionMemory: { buildContext: (scope: unknown) => Promise<string | undefined> } }).sessionMemory = {
+      buildContext: vi.fn().mockResolvedValue(undefined)
+    };
+
+    await (service as unknown as {
+      createSession: (chatId: number, cwd: string, model?: string) => Promise<void>;
+    }).createSession(1, "/tmp/project", "cccli:claude-haiku-4.5");
+
+    expect(client.createSession).toHaveBeenCalledOnce();
+    const options = vi.mocked(client.createSession).mock.calls[0]?.[0] as { model?: string } | undefined;
+    expect(options?.model).toBe("claude-haiku-4.5");
+    expect(state.provider).toBe("claude-code");
+    expect(state.model).toBe("claude-haiku-4.5");
+  });
+
   it("uses auto_edit mode for Claude Code router sessions", async () => {
     const api = createApi();
     const tempSession: AiSession = {

@@ -6,7 +6,6 @@ export type SecretKeys = {
   ownerChatId: string;
   ownerUserId: string;
   directoryPatterns: string | undefined;
-  certificateFingerprints: string | undefined;
 };
 
 const SERVICE_NAME = "teletopaz";
@@ -14,7 +13,6 @@ const KEY_BOT_TOKEN = "bot_token";
 const KEY_OWNER_CHAT_ID = "owner_chat_id";
 const KEY_OWNER_USER_ID = "owner_user_id";
 const KEY_DIR_PATTERNS = "directory_patterns";
-const KEY_CERT_FINGERPRINTS = "certificate_fingerprints";
 const KEY_WA_OWNER_JIDS = "wa_owner_jids";
 
 type KeytarLike = Pick<typeof keytar, "getPassword" | "setPassword">;
@@ -71,12 +69,10 @@ export async function loadConfiguredRuntimeConfig(
   );
   const directoryPatterns = coerceOptionalString(env.TELETOPAZ_DIRECTORY_PATTERNS) ?? keychainDirectoryPatterns;
 
-  // certificateFingerprints: 從 runtime-config.json 取（含環境變數覆寫）
   const fileConfig = await loadRuntimeConfig({ env });
 
   return {
-    directoryPatterns,
-    certificateFingerprints: fileConfig.certificateFingerprints
+    directoryPatterns: directoryPatterns ?? fileConfig.directoryPatterns
   };
 }
 
@@ -110,8 +106,7 @@ export async function loadSecrets(options: LoadSecretsOptions = {}): Promise<Sec
     botToken,
     ownerChatId,
     ownerUserId,
-    directoryPatterns: runtimeConfig.directoryPatterns,
-    certificateFingerprints: runtimeConfig.certificateFingerprints
+    directoryPatterns: runtimeConfig.directoryPatterns
   };
 }
 

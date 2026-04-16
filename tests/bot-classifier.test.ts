@@ -107,19 +107,21 @@ describe("TeleTopazService classifyIntent", () => {
 
     const classifyPromise = (service as unknown as {
       classifyIntent: (chatId: number, text: string, routerModel: string) => Promise<"ROUTER" | "CORE">;
-    }).classifyIntent(1, "幫我看一下 README", "gpt-5-mini");
+    }).classifyIntent(1, "幫我看一下 README", "ctcli:gpt-5-mini");
 
     await vi.advanceTimersByTimeAsync(30_000);
 
     await expect(classifyPromise).resolves.toBe("ROUTER");
 
     const options = vi.mocked(client.createSession).mock.calls[0]?.[0] as {
+      model?: string;
       approvalMode?: string;
       workingDirectory?: string;
       onPermissionRequest?: (input: unknown) => Promise<unknown>;
       hooks?: { onPreToolUse?: (input: { toolName?: string; toolArgs?: Record<string, unknown> }) => Promise<unknown> };
     } | undefined;
 
+    expect(options?.model).toBe("gpt-5-mini");
     expect(options?.approvalMode).toBe("plan");
     expect(options?.workingDirectory).toBe(path.resolve("."));
     expect(options?.onPermissionRequest).toBeTypeOf("function");
