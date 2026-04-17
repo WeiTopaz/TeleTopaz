@@ -2833,7 +2833,7 @@ export class TeleTopazService {
   private formatStateModelLabel(state: AgentContext, manualModelOverride?: string): string {
     if (state.mode === "auto") {
       const activeModel = manualModelOverride ?? state.model;
-      const activePrefix = activeModel ? `目前:${this.formatModelEntry(state.provider, activeModel)} / ` : "";
+      const activePrefix = activeModel ? `目前:${this.formatResolvedModelEntry(activeModel)} / ` : "";
       return `Auto (${activePrefix}R:${this.formatResolvedModelEntry(state.routerModel)} / C:${this.formatResolvedModelEntry(state.coreModel)})`;
     }
     return this.formatModelEntry(state.provider, manualModelOverride ?? state.model ?? "未設定");
@@ -2841,7 +2841,7 @@ export class TeleTopazService {
 
   private formatActiveSource(state: AgentContext): string {
     if (state.mode === "auto") {
-      return state.model ? `Auto:${this.formatModelEntry(state.provider, state.model)}` : "Auto:待路由";
+      return state.model ? `Auto:${this.formatResolvedModelEntry(state.model)}` : "Auto:待路由";
     }
     return this.formatModelEntry(state.provider, state.model ?? "未設定");
   }
