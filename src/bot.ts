@@ -499,10 +499,11 @@ export class TeleTopazService {
   private async classifyIntent(chatId: number, text: string, routerModel: string): Promise<"ROUTER" | "CORE"> {
     const parsedRouterModel = parseConfiguredModelEntry(routerModel);
     const providerType = parsedRouterModel.provider;
+    let session: AiSession | undefined;
     try {
       const client = await this.getIntentClassifierClient(providerType);
       
-      const session = await client.createSession({
+      session = await client.createSession({
         model: parsedRouterModel.model,
         approvalMode: "plan",
         workingDirectory: APP_ROOT,
@@ -516,30 +517,47 @@ export class TeleTopazService {
         }
       });
 
-      let classification = "CORE"; // Default to Core for safety
-      session.onEvent((event) => {
-        if (event.type === "assistant.message") {
-          const content = (event.data as any)?.content;
-          if (typeof content === "string") {
-            const trimmed = content.trim().toUpperCase();
-            if (trimmed.includes("ROUTER")) classification = "ROUTER";
-            else if (trimmed.includes("CORE")) classification = "CORE";
-          }
-        }
-      });
+      const classification = await new Promise<"ROUTER" | "CORE">((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (!settled) { settled = true; resolve("CORE"); }
+        }, 30_000);
 
-      await session.send(text);
-      // Wait up to 30s for classification response to settle
-      await new Promise((resolve) => setTimeout(resolve, 30_000));
-      
-      await session.destroy();
+        session!.onEvent((event) => {
+          if (settled) return;
+          if (event.type === "assistant.message") {
+            const content = (event.data as any)?.content;
+            if (typeof content === "string") {
+              const trimmed = content.trim().toUpperCase();
+              if (trimmed === "ROUTER" || trimmed === "CORE") {
+                settled = true;
+                clearTimeout(timer);
+                resolve(trimmed);
+              }
+            }
+          }
+          if (event.type === "session.idle") {
+            if (!settled) { settled = true; clearTimeout(timer); resolve("CORE"); }
+          }
+        });
+
+        session!.send(text).catch(() => {
+          if (!settled) { settled = true; clearTimeout(timer); resolve("CORE"); }
+        });
+      });
       
       logger.info("Intent classified", { chatId, classification });
-      return classification as "ROUTER" | "CORE";
+      return classification;
     } catch (err) {
-      await this.resetIntentClassifierClient();
+      try { await this.resetIntentClassifierClient(); } catch { /* already logged inside */ }
       logger.warn("Classification failed, defaulting to CORE", err);
       return "CORE";
+    } finally {
+      if (session) {
+        session.destroy().catch((err) => {
+          if (!isConnectionDisposedError(err)) logger.warn("Destroy classifier session failed", err);
+        });
+      }
     }
   }
 
@@ -1510,7 +1528,7 @@ export class TeleTopazService {
     // Manual Models Section
     const allModels = getAllModels();
     allModels.forEach((m, index) => {
-      if (index % 1 === 0) keyboard.inline_keyboard.push([]);
+      keyboard.inline_keyboard.push([]);
       const row = keyboard.inline_keyboard[keyboard.inline_keyboard.length - 1]!;
       // Highlight if active AND in manual mode
       const isActive = state.mode === "manual" && state.model === m.model && state.provider === m.provider;
@@ -1530,7 +1548,7 @@ export class TeleTopazService {
     
     candidates.forEach((m, index) => {
       const globalIndex = allModels.indexOf(m);
-      if (index % 1 === 0) keyboard.inline_keyboard.push([]);
+      keyboard.inline_keyboard.push([]);
       const row = keyboard.inline_keyboard[keyboard.inline_keyboard.length - 1]!;
       const label = normalizeConfiguredModelEntry(state.routerModel, "") === m.entry ? `🟢 ${m.entry}` : m.entry;
       row.push({ text: label, callback_data: `do.model:pick.router:${globalIndex}` });
@@ -1548,7 +1566,7 @@ export class TeleTopazService {
 
     candidates.forEach((m, index) => {
       const globalIndex = allModels.indexOf(m);
-      if (index % 1 === 0) keyboard.inline_keyboard.push([]);
+      keyboard.inline_keyboard.push([]);
       const row = keyboard.inline_keyboard[keyboard.inline_keyboard.length - 1]!;
       const label = normalizeConfiguredModelEntry(state.coreModel, "") === m.entry ? `🟢 ${m.entry}` : m.entry;
       row.push({ text: label, callback_data: `do.model:pick.core:${globalIndex}` });
@@ -1842,7 +1860,7 @@ export class TeleTopazService {
         const restoredVersion = state.sessionVersion;
         snapshot.session.onEvent((event) => {
           if (state.sessionVersion !== restoredVersion) return;
-          void this.enqueueEvent(chatId, event);
+          this.enqueueEvent(chatId, event).catch((err) => logger.error("Event enqueue failed", err));
         });
       }
       const restoredEntry = snapshot.model
@@ -1912,7 +1930,7 @@ export class TeleTopazService {
 
       tempSession.onEvent((event) => {
         if (state.sessionVersion !== routerVersion) return;
-        void this.enqueueEvent(chatId, event);
+        this.enqueueEvent(chatId, event).catch((err) => logger.error("Event enqueue failed", err));
       });
 
       this.routerCompletionCallbacks.set(chatId, () => restoreSnapshot(tempSession));
@@ -1937,7 +1955,7 @@ export class TeleTopazService {
         const restoredVersion = state.sessionVersion;
         snapshot.session.onEvent((event) => {
           if (state.sessionVersion !== restoredVersion) return;
-          void this.enqueueEvent(chatId, event);
+          this.enqueueEvent(chatId, event).catch((err) => logger.error("Event enqueue failed", err));
         });
       }
       await this.safeSend(chatId, `❌ Router 執行失敗：${String(err)}`);
@@ -2077,7 +2095,7 @@ export class TeleTopazService {
       const capturedVersion = state.sessionVersion;
       session.onEvent((event) => {
         if (state.sessionVersion !== capturedVersion) return;
-        void this.enqueueEvent(chatId, event);
+        this.enqueueEvent(chatId, event).catch((err) => logger.error("Event enqueue failed", err));
       });
 
       state.client = client;
@@ -2327,17 +2345,17 @@ export class TeleTopazService {
     const args = record.args ?? record.arguments ?? record.params ?? record.input;
     const argsText = args ? formatJsonResult(args) ?? String(args) : "";
 
-    const paramsKey = this.createResultKey(chatId);
-    const resultKey = this.createResultKey(chatId);
+    const paramsKey = this.createResultKey();
+    const resultKey = this.createResultKey();
     const summary = redact((argsText ?? "").slice(0, TOOL_PREVIEW_LEN));
     const toolText = `工具執行中：${name ?? "未知"}\n參數摘要：${summary}`;
 
     if (state.silentMode) {
       await this.silentSend(chatId, toolText);
       if (argsText) this.toolParams.set(paramsKey, redact(argsText));
-      if (callId) {
+      if (callId && state.silentAnchorMessageId) {
         const tracking: ToolTracking = {
-          messageId: state.silentAnchorMessageId ?? 0,
+          messageId: state.silentAnchorMessageId,
           resultKey,
           paramsKey
         };
@@ -2490,11 +2508,7 @@ export class TeleTopazService {
 
   private async sendAssistantMessage(chatId: number, text: string, replyTo?: number, disableNotification?: boolean): Promise<void> {
     const state = this.getOrCreateState(chatId);
-    let content = text;
-    if ((state as any).pendingFooter) {
-      content += (state as any).pendingFooter;
-      (state as any).pendingFooter = undefined;
-    }
+    const content = text;
 
     if (!content.trim()) {
       logger.warn("Assistant message empty", { chatId });
@@ -2781,7 +2795,7 @@ export class TeleTopazService {
     return directories.size > 0 ? Array.from(directories) : undefined;
   }
 
-  private createResultKey(chatId: number): string {
+  private createResultKey(): string {
     const rand = crypto.randomBytes(6).toString("hex");
     return `${Date.now().toString(36)}${rand}`;
   }

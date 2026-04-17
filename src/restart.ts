@@ -1,8 +1,10 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { logger } from "./util/logger.js";
+
+const GIT_SHA_RE = /^[0-9a-f]{40}$/i;
 
 const STATE_DIR = path.join(os.homedir(), ".teletopaz");
 const STATE_FILE = path.join(STATE_DIR, "restart-state.json");
@@ -21,7 +23,19 @@ export function loadRestartState(): RestartState | null {
   try {
     if (!existsSync(STATE_FILE)) return null;
     const raw = readFileSync(STATE_FILE, "utf-8");
-    return JSON.parse(raw) as RestartState;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (
+      (parsed.triggeredBy !== "user" && parsed.triggeredBy !== "system") ||
+      typeof parsed.triggeredAt !== "number" ||
+      typeof parsed.previousGitSha !== "string" ||
+      !GIT_SHA_RE.test(parsed.previousGitSha) ||
+      typeof parsed.hadUncommittedChanges !== "boolean" ||
+      typeof parsed.rollbackCount !== "number"
+    ) {
+      logger.warn("Restart state failed validation, ignoring");
+      return null;
+    }
+    return parsed as unknown as RestartState;
   } catch (err) {
     logger.warn("Failed to load restart state", err);
     return null;
@@ -61,10 +75,13 @@ export function performGitRollback(projectDir: string, state: RestartState): voi
   execSync("git rev-parse --is-inside-work-tree", { cwd: projectDir, stdio: "pipe" });
 
   if (state.hadUncommittedChanges) {
+    if (!GIT_SHA_RE.test(state.previousGitSha)) {
+      throw new Error(`Invalid git SHA: ${state.previousGitSha}`);
+    }
     logger.info(`Git rollback: reset --hard ${state.previousGitSha}`);
-    execSync(`git reset --hard ${state.previousGitSha}`, { cwd: projectDir, stdio: "pipe" });
+    execFileSync("git", ["reset", "--hard", state.previousGitSha], { cwd: projectDir, stdio: "pipe" });
   } else {
     logger.info("Git rollback: reset --hard HEAD~1");
-    execSync("git reset --hard HEAD~1", { cwd: projectDir, stdio: "pipe" });
+    execFileSync("git", ["reset", "--hard", "HEAD~1"], { cwd: projectDir, stdio: "pipe" });
   }
 }

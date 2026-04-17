@@ -48,7 +48,7 @@ describe("restart state management", () => {
     const state: RestartState = {
       triggeredBy: "user",
       triggeredAt: 1710000000000,
-      previousGitSha: "abc123",
+      previousGitSha: "a".repeat(40),
       hadUncommittedChanges: true,
       rollbackCount: 0,
     };
@@ -61,7 +61,7 @@ describe("restart state management", () => {
     const state: RestartState = {
       triggeredBy: "user",
       triggeredAt: 1710000000000,
-      previousGitSha: "abc123",
+      previousGitSha: "b".repeat(40),
       hadUncommittedChanges: false,
       rollbackCount: 0,
     };
@@ -75,14 +75,14 @@ describe("restart state management", () => {
     const state1: RestartState = {
       triggeredBy: "user",
       triggeredAt: 1710000000000,
-      previousGitSha: "abc123",
+      previousGitSha: "c".repeat(40),
       hadUncommittedChanges: false,
       rollbackCount: 0,
     };
     const state2: RestartState = {
       triggeredBy: "system",
       triggeredAt: 1710000001000,
-      previousGitSha: "abc123",
+      previousGitSha: "d".repeat(40),
       hadUncommittedChanges: false,
       rollbackCount: 1,
     };
@@ -90,5 +90,17 @@ describe("restart state management", () => {
     saveRestartState(state2);
     const loaded = loadRestartState();
     expect(loaded).toEqual(state2);
+  });
+
+  it("loadRestartState rejects invalid SHA", () => {
+    const state: RestartState = {
+      triggeredBy: "user",
+      triggeredAt: 1710000000000,
+      previousGitSha: "abc123",
+      hadUncommittedChanges: false,
+      rollbackCount: 0,
+    };
+    saveRestartState(state);
+    expect(loadRestartState()).toBeNull();
   });
 });
