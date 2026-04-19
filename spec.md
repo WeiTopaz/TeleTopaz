@@ -1,7 +1,7 @@
 # 💎 TeleTopaz — 技術規格文件
 
-> **版本**：0.3.0
-> **最後更新**：2026-03-18
+> **代碼快照**：2026-04-18（依目前程式碼校對；`package.json` 版號仍為 `0.1.0`）
+> **最後更新**：2026-04-18
 > **語言 / 框架**：TypeScript (ES2022) · Node.js 22+ · ESM
 
 ---
@@ -11,14 +11,14 @@
 1. [概觀與系統需求](#1-概觀與系統需求)
 2. [架構總覽](#2-架構總覽)
 3. [啟動流程](#3-啟動流程)
-4. [核心機器人邏輯](#4-核心機器人邏輯)
+4. [核心機器人邏輯（Telegram）](#4-核心機器人邏輯telegram)
 5. [會話管理](#5-會話管理)
 6. [會話韌性與復原](#6-會話韌性與復原)
 7. [AI 供應商整合](#7-ai-供應商整合)
 8. [PTY 模組](#8-pty-模組)
 9. [智慧路由 (Auto Mode)](#9-智慧路由-auto-mode)
 10. [安全機制](#10-安全機制)
-11. [Telegram 整合](#11-telegram-整合)
+11. [雙通道整合](#11-雙通道整合)
 12. [設定管理](#12-設定管理)
 13. [工具程式與輔助模組](#13-工具程式與輔助模組)
 14. [常數與限制](#14-常數與限制)
@@ -31,13 +31,14 @@
 
 ### 1.1 專案簡介
 
-TeleTopaz 是以 TypeScript 實作的進階 AI 代理 Telegram 機器人，支援 **GitHub Copilot SDK** 與 **Google Gemini CLI** 雙供應商。核心特色包括：
+TeleTopaz 是以 TypeScript 實作的本機 AI 代理工作台，主體以 **Telegram** 為核心互動介面，並可選配 **WhatsApp Linked Device** 頻道。程式目前支援 **GitHub Copilot SDK**、**Google Gemini CLI / PTY**、**Claude Code CLI** 三條供應商路徑。核心特色包括：
 
-- **雙供應商支援**：同時整合 GitHub Copilot 與 Google Gemini，可依需求自由切換
+- **雙通道支援**：`src/index.ts` 會先啟動 Telegram，再視 `TELETOPAZ_WA_OWNER_JIDS` 是否存在決定是否啟動 WhatsApp
+- **多供應商支援**：整合 GitHub Copilot、Google Gemini 及 Claude Code，可依需求自由切換
 - **智慧路由 (Auto Mode)**：自動分析使用者意圖，簡單查詢使用輕量模型 (Router)，複雜任務切換至強力模型 (Core)
 - **安全持久化記憶**：以工作區為作用域保存最近對話脈絡，寫入前自動遮罩敏感資訊
 - **安全沙盒**：在 macOS 上透過 `sandbox-exec` 隔離執行環境
-- **人機協作護欄**：敏感操作需使用者即時按鈕確認
+- **人機協作護欄**：Telegram 的高風險工具操作需即時按鈕確認；WhatsApp 目前採簡化通道實作，工具操作預設直接放行
 - **隱私優先**：內建敏感資訊遮蔽 (Redaction) 與 Prompt Injection 防護
 
 ### 1.2 系統需求
@@ -54,9 +55,13 @@ TeleTopaz 是以 TypeScript 實作的進階 AI 代理 Telegram 機器人，支�
 | 套件 | 用途 |
 |------|------|
 | `@github/copilot-sdk` | Copilot AI 供應商整合 |
+| `@whiskeysockets/baileys` | WhatsApp Linked Device 通道 |
+| `@hapi/boom` | Baileys 錯誤型別 |
 | `node-pty` | Gemini PTY 工作階段（偽終端機） |
 | `fast-glob` | 目錄模式展開 |
 | `keytar` | macOS Keychain 存取 |
+| `pino` | WhatsApp / Baileys 日誌封裝 |
+| `qrcode-terminal` | WhatsApp QR Code 終端顯示 |
 | `sharp` | 圖片重新編碼（JPEG） |
 | `vitest` | 測試框架 |
 | `typescript` | TypeScript 編譯器 |
@@ -68,19 +73,23 @@ TeleTopaz 是以 TypeScript 實作的進階 AI 代理 Telegram 機器人，支�
 TeleTopaz/
 ├── src/
 │   ├── index.ts              # 進入點
-│   ├── bot.ts                # 機器人核心邏輯 (~2,723 行)
+│   ├── bot.ts                # Telegram 核心協調器
+│   ├── channel/
+│   │   └── types.ts          # 跨通道抽象介面
 │   ├── config/
 │   │   ├── models.ts         # 模型定義與格式化
 │   │   ├── directories.ts    # 目錄存取控制
 │   │   ├── secrets.ts        # 密鑰管理
 │   │   └── runtime-config.ts # 執行時設定持久化
 │   ├── session/
+│   │   ├── base-state.ts     # Telegram / WhatsApp 共用狀態基底
 │   │   ├── state.ts          # 會話狀態型別定義
 │   │   ├── persona.ts        # 人設提示詞建構
 │   │   ├── memory-store.ts   # 持久化會話記憶
 │   │   ├── prompt.ts         # 提示詞組裝與分段
 │   │   └── emoji.ts          # 會話圖示池
 │   ├── provider/
+│   │   ├── factory.ts        # Provider 工廠（含 Gemini PTY 切換）
 │   │   └── types.ts          # AI 供應商抽象介面
 │   ├── copilot/
 │   │   └── sdk.ts            # Copilot SDK 封裝
@@ -89,6 +98,13 @@ TeleTopaz/
 │   │   └── pty-session.ts    # Gemini PTY 工作階段封裝
 │   ├── claude/
 │   │   └── sdk.ts            # Claude Code CLI 封裝
+│   ├── whatsapp/
+│   │   ├── adapter.ts        # WhatsApp ChannelAdapter 實作
+│   │   ├── client.ts         # Baileys 客戶端封裝
+│   │   ├── markdown.ts       # Markdown → WhatsApp 轉換
+│   │   ├── qrcode-terminal.d.ts # QRCode 模組型別宣告
+│   │   ├── service.ts        # WhatsApp 服務主類
+│   │   └── types.ts          # WhatsApp 型別定義
 │   ├── pty/
 │   │   ├── index.ts          # PTY 模組匯出
 │   │   ├── runner.ts         # PTY 執行器
@@ -104,6 +120,7 @@ TeleTopaz/
 │   │   ├── builtin.ts        # 內建安全規則
 │   │   └── types.ts          # 護欄型別定義
 │   ├── telegram/
+│   │   ├── adapter.ts        # Telegram ChannelAdapter 實作
 │   │   ├── api.ts            # Telegram Bot API 封裝
 │   │   └── types.ts          # Telegram 型別定義
 │   ├── services/
@@ -119,7 +136,7 @@ TeleTopaz/
 │       ├── redaction.ts      # 敏感資料遮蔽
 │       ├── images.ts         # 圖片處理
 │       └── app-data.ts       # App Data 目錄解析
-├── tests/                    # 52 個測試檔案
+├── tests/                    # 測試檔案
 ├── scripts/
 │   ├── launcher.js           # 熱重啟 Launcher
 │   └── setup-secrets.ts      # 密鑰設定精靈
@@ -139,9 +156,10 @@ TeleTopaz/
 
 ```mermaid
 graph TB
-    subgraph Telegram ["Telegram 平台"]
-        TG_USER["👤 使用者 (Owner)"]
+    subgraph Channels ["聊天通道"]
+        OWNER["👤 Owner"]
         TG_API_EXT["Telegram Bot API"]
+        WA_LINK["WhatsApp Linked Device"]
     end
 
     subgraph TeleTopaz ["TeleTopaz 機器人"]
@@ -151,14 +169,16 @@ graph TB
             SANDBOX["sandbox.ts<br/>沙盒啟動"]
         end
 
-        subgraph Core ["核心層"]
-            BOT["TeleTopazService<br/>bot.ts"]
+        subgraph Core ["協調層"]
+            BOT["TeleTopazService<br/>Telegram 核心"]
+            WA_SERVICE["WhatsAppService<br/>WhatsApp 核心"]
             SESSION["Session 管理<br/>session/"]
             GUARDRAILS["護欄引擎<br/>guardrails/"]
             RESTART["restart.ts<br/>熱重啟狀態"]
         end
 
         subgraph Provider ["供應商層"]
+            FACTORY["createProviderClient<br/>provider/factory.ts"]
             PROVIDER_TYPES["Provider 抽象介面<br/>provider/types.ts"]
             COPILOT["CopilotSdkClient<br/>copilot/sdk.ts"]
             GEMINI["GeminiSdkClient<br/>gemini/sdk.ts"]
@@ -168,7 +188,9 @@ graph TB
         end
 
         subgraph Infra ["基礎設施層"]
+            WA_WRAP["WhatsAppClient<br/>whatsapp/client.ts"]
             TG_WRAP["TelegramApi<br/>telegram/api.ts"]
+            CHANNEL["ChannelAdapter<br/>channel/types.ts"]
             CONFIG["設定管理<br/>config/"]
             UTIL["工具程式<br/>util/"]
             QUOTA["QuotaService<br/>services/quota.ts"]
@@ -182,21 +204,31 @@ graph TB
         KEYCHAIN["macOS Keychain"]
     end
 
-    TG_USER <-->|訊息 / 回調| TG_API_EXT
+    OWNER <-->|訊息 / 按鈕| TG_API_EXT
+    OWNER <-->|訊息 / 媒體| WA_LINK
     TG_API_EXT <-->|Long Polling<br/>HTTPS| TG_WRAP
+    WA_LINK <-->|Baileys events| WA_WRAP
 
     LAUNCHER -->|spawn / 監控 exit code| INDEX
     INDEX --> SANDBOX
     INDEX --> BOT
+    INDEX --> WA_SERVICE
 
     BOT --> SESSION
+    WA_SERVICE --> SESSION
     BOT --> GUARDRAILS
+    WA_SERVICE --> GUARDRAILS
     BOT --> RESTART
     BOT --> TG_WRAP
+    WA_SERVICE --> WA_WRAP
     BOT --> CONFIG
+    WA_SERVICE --> CONFIG
     BOT --> QUOTA
-    BOT --> PROVIDER_TYPES
+    WA_SERVICE --> QUOTA
+    BOT --> FACTORY
+    WA_SERVICE --> FACTORY
 
+    FACTORY --> PROVIDER_TYPES
     PROVIDER_TYPES --> COPILOT
     PROVIDER_TYPES --> GEMINI
     PROVIDER_TYPES --> GEMINI_PTY
@@ -212,6 +244,9 @@ graph TB
     SESSION --> UTIL
     GUARDRAILS --> UTIL
     BOT --> UTIL
+    WA_SERVICE --> UTIL
+    TG_WRAP --> CHANNEL
+    WA_WRAP --> CHANNEL
 ```
 
 ### 2.2 資料流圖
@@ -219,20 +254,20 @@ graph TB
 ```mermaid
 sequenceDiagram
     participant U as 使用者
-    participant TG as Telegram API
-    participant B as TeleTopazService
+    participant CH as Telegram / WhatsApp
+    participant B as TeleTopazService / WhatsAppService
     participant G as Guardrails
     participant C as Intent Classifier
     participant P as AI Provider
     participant M as Memory Store
 
-    U->>TG: 傳送訊息
-    TG->>B: getUpdates (Long Polling)
+    U->>CH: 傳送訊息 / 媒體
+    CH->>B: Long Polling 或事件推送
     B->>B: handleMessage()
 
     alt 含圖片附件
-        B->>TG: 下載檔案
-        B->>B: reencodePhoto() → 儲存 base64
+        B->>CH: 下載檔案 / 媒體
+        B->>B: 重編碼或落地附件
     end
 
     B->>G: evaluatePrompt(policy, text)
@@ -250,20 +285,20 @@ sequenceDiagram
 
         loop 事件串流
             P-->>B: tool.execution_start
-            B->>TG: 顯示工具執行狀態
+            B->>CH: 顯示工具執行狀態
 
             alt 需要權限確認
-                B->>TG: 發送 ✅/❌ 按鈕
-                U->>TG: 點擊按鈕
-                TG->>B: callback_query
+                B->>CH: 發送批准 UI / 直接放行
+                U->>CH: 點擊按鈕（Telegram）
+                CH->>B: callback_query
                 B->>P: 回傳權限決定
             end
 
             P-->>B: tool.execution_complete
-            B->>TG: 更新工具狀態 + 表情反應
+            B->>CH: 更新工具狀態 / 表情反應
 
             P-->>B: assistant.message
-            B->>TG: 傳送 AI 回覆
+            B->>CH: 傳送 AI 回覆
         end
 
         P-->>B: session.idle
@@ -280,6 +315,7 @@ graph LR
     bot --> session/memory-store
     bot --> session/prompt
     bot --> session/emoji
+    bot --> provider/factory
     bot --> provider/types
     bot --> copilot/sdk
     bot --> gemini/sdk
@@ -287,6 +323,7 @@ graph LR
     bot --> claude/sdk
     bot --> guardrails/guardrails
     bot --> telegram/api
+    bot --> telegram/adapter
     bot --> config/models
     bot --> config/directories
     bot --> config/secrets
@@ -315,11 +352,20 @@ graph LR
     session/persona --> util/logger
 
     telegram/api --> telegram/types
+    telegram/adapter --> channel/types
+    whatsapp/service --> whatsapp/client
+    whatsapp/service --> whatsapp/markdown
+    whatsapp/service --> whatsapp/types
+    whatsapp/service --> provider/factory
+    whatsapp/service --> session/memory-store
+    whatsapp/service --> guardrails/guardrails
+    whatsapp/adapter --> channel/types
 
     config/secrets --> config/runtime-config
     config/directories -.-> fast-glob
 
     index --> bot
+    index --> whatsapp/service
     index --> sandbox
     sandbox --> sandbox-profile
     sandbox --> config/directories
@@ -352,30 +398,33 @@ flowchart TD
 ```mermaid
 flowchart TD
     A[main] --> B[ensureSandbox]
-    B --> C{macOS 且未<br/>已在沙盒內?}
+    B --> C{macOS 且未在沙盒內?}
     C -->|是| D[載入目錄模式]
     D --> E[buildSandboxProfile]
     E --> F[sandbox-exec 重新啟動]
     F --> G[原始程序退出]
-    C -->|否| H[TeleTopazService.create]
-    H --> I[loadSecrets]
-    I --> J[new TeleTopazService]
-    J --> K[bot.start]
-    K --> L[進入 Polling 迴圈]
-
-    K --> M[loadGuardrails]
-    K --> N[loadAllowedDirectories]
-    K --> O[ensureTempNoteDirectory]
-    K --> P[clearOfflineUpdates]
-    K --> Q[registerSignalHandlers]
-    K --> R[sendWelcome]
+    C -->|否| H[Promise.all 建立 Telegram + WhatsApp 服務]
+    H --> I[TeleTopazService.create]
+    H --> J[WhatsAppService.create]
+    J --> K{WA Owner JIDs 已設定?}
+    K -->|是| L[wa.start]
+    K -->|否| M[略過 WhatsApp]
+    L --> N[bot.start]
+    M --> N
+    N --> O[載入護欄 / 目錄 / TempNote]
+    O --> P[清除離線更新]
+    P --> Q[送出歡迎訊息]
+    Q --> R[進入 Telegram Polling 迴圈]
 ```
 
 ### 3.2 密鑰載入優先順序
 
-1. **環境變數** — `TELETOPAZ_BOT_TOKEN` / `TELETOPAZ_OWNER_CHAT_ID` / `TELETOPAZ_OWNER_USER_ID`
-2. **macOS Keychain** — 服務名稱 `teletopaz`，鍵名 `bot_token` / `owner_chat_id` / `owner_user_id`
-3. **失敗** — 若兩者皆缺，拋出錯誤並終止
+| 類別 | 載入順序 | 備註 |
+|------|----------|------|
+| **Telegram 必要密鑰** | 環境變數 → Keychain → 失敗 | `TELETOPAZ_BOT_TOKEN` / `TELETOPAZ_OWNER_CHAT_ID` / `TELETOPAZ_OWNER_USER_ID`，由 `loadSecrets()` 載入 |
+| **目錄設定** | `TELETOPAZ_DIRECTORY_PATTERNS` → Keychain `directory_patterns` → `runtime-config.json` | `loadConfiguredRuntimeConfig()` 會先看環境變數與 Keychain，再以檔案作 fallback |
+| **WhatsApp Owner JIDs** | `TELETOPAZ_WA_OWNER_JIDS` → Keychain `wa_owner_jids` → 關閉 WhatsApp | 若未設定，`WhatsAppService.create()` 直接回傳 `null` |
+| **WhatsApp 預設模型** | `TELETOPAZ_WA_MODEL` → `TELETOPAZ_DEFAULT_MODEL` → `DEFAULT_MODEL_ENTRY` | 最終再用 `parseModelEntry()` 解析 provider / model |
 
 ### 3.3 沙盒啟動條件
 
@@ -384,16 +433,17 @@ flowchart TD
 | `process.platform === "darwin"` | 僅 macOS 支援 |
 | `!isSandboxActive()` | 尚未在沙盒環境中 |
 | `isSandboxEnabled()` | 永遠回傳 `true`（無法透過環境變數停用） |
-| `TELETOPAZ_DIRECTORY_PATTERNS` 非空 | 至少一個可寫入目錄 |
+| 載入後的 `directoryPatterns` 非空 | 至少一個可寫入目錄（可來自環境變數、Keychain 或 runtime-config） |
 
 ---
 
-## 4. 核心機器人邏輯
+## 4. 核心機器人邏輯（Telegram）
 
 ### 4.1 TeleTopazService 類別
 
-**檔案**：`src/bot.ts` (~2,723 行)  
-**職責**：訊息處理、指令路由、事件分發、工具權限管理、會話生命週期管理、會話韌性復原
+**檔案**：`src/bot.ts`  
+**職責**：Telegram 訊息處理、指令路由、事件分發、工具權限管理、會話生命週期管理、會話韌性復原。  
+**補充**：WhatsApp 採獨立的 `src/whatsapp/service.ts`，其流程相近，但不共用 Telegram 的 callback/button UI。
 
 #### 4.1.1 靜態工廠方法
 
@@ -502,6 +552,23 @@ const MIME_EXTENSIONS: Record<string, string> = {
 | `/quit` | — | `shutdown()` | 安全關閉機器人 |
 
 > **陳舊事件過濾**：`/restart` 與 `/quit` 指令及所有 `callback_query` 會檢查訊息日期是否 ≥ `startTimestamp`，以過濾離線期間堆積的事件。
+
+#### 快捷按鈕 (`SHORTCUT_BUTTONS`)
+
+Telegram 歡迎訊息的 inline keyboard 下方附帶一列快捷按鈕，按下後自動切換工作區與模型並等待使用者輸入：
+
+| Label | `callbackKey` | 目標工作區 | 切換模型 |
+|-------|---------------|------------|----------|
+| 📔 日記 | `diary` | `MyDiary` | `ctcli:gpt-5-mini` |
+| 📓 筆記 | `notebook` | `MyNotebook` | `ctcli:gpt-5-mini` |
+
+回調格式：`do.shortcut:{callbackKey}`
+
+處理流程：
+1. 從 `SHORTCUT_BUTTONS` 找到對應 config
+2. 搜尋 `loadAllowedDirectories()` 中是否有 `basename === config.targetDirName`
+3. 若找到：清除 session → 切換 `workDir` 與 `model` → 等待下一則訊息
+4. 若未找到：回傳「找不到目錄 {targetDirName}，請確認 TELETOPAZ_DIRECTORY_PATTERNS 設定」
 
 #### 4.3.1 `/newproject` 指令規格
 
@@ -620,6 +687,7 @@ type ToolTracking = {
 | `do.model` / `do.model:{sub}` | 模型選擇 UI（子路由含 `auto`, `config_router`, `config_core`） |
 | `do.info` | 顯示狀態 |
 | `do.help` | 顯示說明 |
+| `do.shortcut:{key}` | 套用快捷按鈕（如 `MyDiary` / `MyNotebook`） |
 | `pick.proj:{idx}` | 設定工作目錄 |
 | `pick.mod:{idx}` | 設定模型（手動模式） |
 | `do.model:pick.manual:{idx}` | 設定模型（手動模式，統一 UI，`do.model:` 子路由） |
@@ -637,6 +705,8 @@ type ToolTracking = {
 ---
 
 ## 5. 會話管理
+
+> `src/session/base-state.ts` 定義 Telegram / WhatsApp 共用欄位；`src/session/state.ts` 的 `AgentContext` 與 `src/whatsapp/types.ts` 的 `WaState` 再各自擴充通道專屬狀態。
 
 ### 5.1 AgentContext 狀態結構
 
@@ -899,6 +969,8 @@ TeleTopaz 具備兩種會話韌性機制，確保 AI Provider 連線中斷或長
 | **被動偵測** | `session.send()` 拋出 `connection disposed` 錯誤 | 通知 + 按鈕詢問是否重送 | ❌ 重建時無；僅按「仍要發送」才消耗 |
 | **主動偵測** | `poll()` 中定期檢查 idle / lifetime 超時 | 僅通知（靜默時段不通知），無詢問 | ❌ 完全不消耗 |
 
+> Telegram 與 WhatsApp 目前都使用相同的 idle / lifetime 門檻（1 小時 / 10 小時），但 Telegram 有較完整的主動通知與 callback-based recovery；WhatsApp 目前僅保留較簡化的 session 重建與文字提示。
+
 ### 6.2 時間常數
 
 | 常數 | 值 | 說明 |
@@ -994,6 +1066,11 @@ flowchart TD
 ---
 
 ## 7. AI 供應商整合
+
+> `src/provider/factory.ts` 的 `createProviderClient(provider)` 是實際入口：  
+> - `copilot` → `CopilotSdkClient`  
+> - `claude-code` → `ClaudeCodeSdkClient`  
+> - `gemini` → `TELETOPAZ_USE_PTY === "1"` 時使用 `GeminiPtyClient`，否則使用 `GeminiSdkClient`
 
 ### 7.1 抽象介面 (`src/provider/types.ts`)
 
@@ -1198,10 +1275,38 @@ gemini -m {model} --output-format stream-json --approval-mode {approvalMode} < {
   - `plan` → `plan`
   - 其他 → `default`
 
+#### 模型名稱轉換 (`resolveModelFlag`)
+
+Claude Code CLI 接受別名（`opus`, `sonnet`）或完整名稱（`claude-opus-4-6`），但 `SUPPORTED_MODELS` 中的格式使用 `.` 分隔（如 `claude-opus-4.6`）。`resolveModelFlag()` 將 `.` 全部替換為 `-`：
+
+```typescript
+resolveModelFlag("claude-opus-4.6") → "claude-opus-4-6"
+```
+
+#### 暫存設定檔 (`writeClaudeSettingsFile`)
+
+每次建立 session 時，寫入一個暫存 JSON 檔案以授權 Claude Code CLI 存取 `~/.claude` 目錄：
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Read(~/.claude/**)", "Read(~/.claude.json)",
+      "Edit(~/.claude/**)", "Edit(~/.claude.json)"
+    ],
+    "additionalDirectories": ["~/.claude", "{workDir}"]
+  }
+}
+```
+
+- 路徑：`/tmp/teletopaz-claude-settings-{randomBytes(8).hex}.json`
+- CLI 透過 `--settings {path}` 旗標讀取
+- session 結束後由 `finally` 區塊清除
+
 #### `queryProviderInfo()`
 
 ```typescript
-{ models: ["claude-opus-4.6", "claude-sonnet-4.6"], version: "Claude-Code-CLI" }
+{ models: ["claude-opus-4.6", "claude-sonnet-4.6", "claude-haiku-4.5"], version: "Claude-Code-CLI" }
 ```
 
 #### 附件處理
@@ -1260,6 +1365,14 @@ claude -p \
 - 擬人化輸入（`HumanTypist`）模擬真實鍵入節奏
 - 自動偵測互動提示（工具批准請求），根據 `onPreToolUse` hook 回傳 `y/n`
 - 自動跳過「Press Enter to open browser」提示
+
+#### `queryProviderInfo()`
+
+```typescript
+{ models: ["gemini-3.1-pro-preview"], version: "CLI-PTY-Wrapper" }
+```
+
+> **注意**：與 Gemini CLI SDK 的 `"CLI-Wrapper"` 不同，PTY 版本回傳 `"CLI-PTY-Wrapper"` 以區分兩種後端。
 
 #### CLI 呼叫格式
 
@@ -1322,6 +1435,21 @@ PTY 模組提供透過偽終端機（pseudo-terminal）驅動互動式 CLI 工�
 | `request-queue.ts` (`RequestQueue`) | 請求串列化：確保同一 PTY 工作階段的請求不並發 |
 | `session-pacer.ts` (`SessionPacer`) | 步調控制：避免過快發送請求造成 CLI 混亂 |
 
+#### 終端機模擬環境
+
+`PtyRunner` 產生的偽終端機設定以下環境變數，偽裝為 Ghostty 終端，確保 CLI 工具的 `terminfo` 與色彩輸出正常：
+
+| 環境變數 | 值 | 說明 |
+|----------|-----|------|
+| `TERM` | `xterm-ghostty` | 終端類型 |
+| `TERM_PROGRAM` | `ghostty` | 終端程式名稱 |
+| `TERM_PROGRAM_VERSION` | `1.1.3` | 偽裝版本 |
+| `COLORTERM` | `truecolor` | 24-bit 色彩支援 |
+| `SHELL` | `process.env.SHELL \|\| "/bin/zsh"` | 繼承或預設 |
+| `LANG` | `en_US.UTF-8` | 語系 |
+
+PTY 尺寸預設為 `cols: 120, rows: 40`。
+
 ### 8.3 崩潰重建策略
 
 `PtySessionManager` 負責監控 PTY 崩潰並嘗試重建：
@@ -1333,16 +1461,16 @@ PTY 模組提供透過偽終端機（pseudo-terminal）驅動互動式 CLI 工�
 
 ---
 
-## 8. 智慧路由 (Auto Mode)
+## 9. 智慧路由 (Auto Mode)
 
-### 8.1 概觀
+### 9.1 概觀
 
 Auto Mode 會為每個使用者訊息進行意圖分類，根據複雜度自動選擇合適的 AI 模型：
 
 - **ROUTER** — 簡單查詢（問候、快速問答）→ 使用輕量模型
 - **CORE** — 複雜任務（程式撰寫、深度推理、長文寫作）→ 使用強力模型
 
-### 8.2 意圖分類器
+### 9.2 意圖分類器
 
 ```typescript
 async classifyIntent(
@@ -1368,22 +1496,22 @@ async classifyIntent(
 - `onPreToolUse` hook 阻擋所有工具使用
 - 不影響主 session 狀態
 
-### 8.3 預設模型
+### 9.3 預設模型
 
 | 角色 | 預設模型 | 供應商 |
 |------|----------|--------|
 | Router | `gpt-5-mini` | Copilot |
-| Core | `claude-sonnet-4.6` | Claude Code |
+| Core | `gpt-5.4` | Copilot |
 
-### 8.4 Router 模型篩選
+### 9.4 Router 模型篩選
 
 符合以下正則表達式的模型可作為 Router：
 
 ```
-/(?:^|[-.])(mini|flash|lite)(?:$|[-.])/i
+/(?:^|[-.])(mini|flash|lite|haiku)(?:$|[-.])/i
 ```
 
-### 8.5 模型切換
+### 9.5 模型切換
 
 ```mermaid
 flowchart TD
@@ -1402,9 +1530,9 @@ flowchart TD
 
 ---
 
-## 9. 安全機制
+## 10. 安全機制
 
-### 9.1 安全分層架構
+### 10.1 安全分層架構
 
 ```mermaid
 graph TB
@@ -1430,7 +1558,7 @@ graph TB
     L1 --> L2 --> L3 --> L4
 ```
 
-### 9.2 沙盒 (`src/sandbox.ts` + `src/sandbox-profile.ts`)
+### 10.2 沙盒 (`src/sandbox.ts` + `src/sandbox-profile.ts`)
 
 #### `src/sandbox.ts` 匯出
 
@@ -1462,8 +1590,12 @@ graph TB
 | `~/.copilot/` | Copilot CLI 設定 |
 | `~/.codex/` | Codex CLI 設定 |
 | `~/.gemini/` | Gemini 設定 |
+| `~/.claude/`、`~/.claude.json`、`~/Library/Application Support/Claude` | Claude Code / Claude Desktop 設定 |
+| `/private/tmp/claude-{uid}/`、`/tmp/claude-{uid}/` | Claude Code CLI 暫存工作區（以系統 UID 區分） |
+| `/private/tmp/claude-settings-*`、`/tmp/claude-settings-*` | Claude 暫存設定檔（TeleTopaz 的 `writeClaudeSettingsFile()` 使用） |
+| `/private/tmp/claude-{hex}-cwd/`、`/tmp/claude-{hex}-cwd/` | Claude Code CLI 工作目錄暫存（正則匹配） |
 | `/dev/null`, `/dev/ptmx` | 子程序裝置節點（可讀寫） |
-| `/dev/pts` | 虛擬終端（僅讀取，不可寫入） |
+| `/dev/pts`、`/dev/ttysNNN` | 互動式 PTY / node-pty 裝置節點 |
 
 #### 讀取黑名單
 
@@ -1476,11 +1608,13 @@ graph TB
 | `~/.ssh/` | SSH 金鑰 |
 | `~/.gnupg/` | GPG 金鑰 |
 
+> `.aws/`、`.kube/`、`.env*`、`id_rsa` 等敏感路徑，主要由工具層的 `getPathRestriction()` / `isSensitivePath()` 阻擋，而非 sandbox profile 直接拒讀。
+
 #### 設定檔格式
 
 以 Apple Sandbox Profile Language (`.sb`) 生成，寫入 `/tmp/teletopaz-sandbox-{pid}.sb`，程序結束時自動清除。
 
-### 9.3 護欄引擎 (`src/guardrails/`)
+### 10.3 護欄引擎 (`src/guardrails/`)
 
 #### 政策結構
 
@@ -1564,8 +1698,25 @@ flowchart TD
    **動作詞（18 組）**：
    `show`, `reveal`, `display`, `dump`, `export`, `print`, `leak`, `exfiltrate`, `steal`, `read`, `cat`, `顯示`, `揭露`, `輸出`, `列出`, `洩漏`, `讀取`, `匯出`
 
-   **敏感目標詞（24 組）**：
-   `password`, `secret`, `token`, `api key`, `apikey`, `private key`, `ssh`, `keychain`, `env`, `environment variable`, `credential`, `cookie`, `session`, `/etc/passwd`, `/etc/shadow`, `密碼`, `金鑰`, `密鑰`, `令牌`, `私鑰`, `憑證`, `環境變數`, `金鑰圈`, `憑據`
+   **敏感目標詞（目前實作）**：
+   `password`, `secret`, `token`, `api key`, `apikey`, `private key`, `ssh key`, `keychain`, `env`, `environment variable`, `credential`, `cookie`, `session`, `密碼`, `金鑰`, `密鑰`, `令牌`, `私鑰`, `憑證`, `環境變數`, `金鑰圈`, `憑據`
+
+#### 安全上下文豁免 (`SAFE_TARGET_CONTEXTS`)
+
+部分敏感目標詞在特定上下文中屬於正常技術用語，不應觸發阻擋。`SAFE_TARGET_CONTEXTS` 定義了各目標詞的安全上下文清單：
+
+| 目標詞 | 安全上下文（部分列舉） |
+|--------|----------------------|
+| `token` | token count, token limit, token usage, token type, token bucket, token refresh, csrf token, token string |
+| `session` | session middleware, session timeout, session storage, session management, session config, session handler, session pool |
+| `env` | env config, env setup, env example, env.example, env template |
+| `environment variable` | environment variable type, environment variable syntax, environment variable config, environment variable docs |
+| `credential` | credential flow, credential provider, credential rotation, credential store |
+| `cookie` | cookie policy, cookie banner, cookie consent, cookie parser, cookie jar |
+| `secret` | secret manager, secret rotation, secret store, secret backend |
+| `ssh key` | ssh key generation, ssh key format, ssh key pair |
+
+匹配邏輯（`isInSafeContext()`）：將句子中的目標詞複數形式正規化為單數後，檢查是否包含任一安全上下文字串。
 
 #### 工具輸出護欄
 
@@ -1608,7 +1759,7 @@ type GuardedOutput = {
 }
 ```
 
-### 9.4 工具權限管理
+### 10.4 工具權限管理
 
 #### 工具分類
 
@@ -1683,7 +1834,7 @@ flowchart TD
 /(?:^|[_-])(path|paths|file|files|dir|dirs|directory|directories|cwd|root|glob|pattern)$/i
 ```
 
-### 9.5 敏感資料遮蔽 (`src/util/redaction.ts`)
+### 10.5 敏感資料遮蔽 (`src/util/redaction.ts`)
 
 #### 遮蔽層級
 
@@ -1714,17 +1865,121 @@ flowchart TD
 
 ---
 
-## 10. Telegram 整合
+## 11. 雙通道整合
 
-### 10.1 TelegramApi 類別 (`src/telegram/api.ts`)
+### 11.1 ChannelAdapter 抽象 (`src/channel/types.ts`)
 
-#### 建構子
+專案已抽出最小共通通道介面，讓 Telegram 與 WhatsApp 可以共用格式化、發送、reaction、typing 等概念：
+
+```typescript
+interface ChannelAdapter {
+  readonly name: string
+  sendMessage(channelId: string, text: string, options?: SendOptions): Promise<string>
+  editMessage(channelId: string, messageId: string, text: string): Promise<void>
+  sendReaction(channelId: string, messageId: string, emoji: string): Promise<void>
+  sendTyping(channelId: string): Promise<void>
+  formatMarkdown(text: string): string
+  splitMessage(text: string): string[]
+  isOwner(senderId: string): boolean
+}
+```
+
+目前 `src/telegram/adapter.ts` 與 `src/whatsapp/adapter.ts` 都已實作此介面，但主流程仍分別由 `TeleTopazService` 與 `WhatsAppService` 管理。
+
+### 11.2 WhatsApp 整合 (`src/whatsapp/`)
+
+WhatsApp 通道使用 **Baileys + Linked Device**，由 `src/index.ts` 啟動時視設定決定是否啟用。
+
+#### 11.2.1 `WhatsAppService.create()` 行為
+
+| 項目 | 實作 |
+|------|------|
+| 啟用條件 | `TELETOPAZ_WA_OWNER_JIDS` 或 Keychain `wa_owner_jids` 有值 |
+| 認證目錄 | `TELETOPAZ_WA_AUTH_DIR`，預設 `~/.teletopaz/whatsapp-auth` |
+| 預設模型 | `TELETOPAZ_WA_MODEL` → `TELETOPAZ_DEFAULT_MODEL` → `DEFAULT_MODEL_ENTRY` |
+| 預設工作區 | `TempNote`，若不存在則取第一個允許目錄 |
+| 擁有者驗證 | 接受 bare phone 與完整 JID；self-chat 的 `@lid` 視為可信 |
+
+#### WhatsApp 預設狀態與 Telegram 的差異
+
+| 欄位 | Telegram (`AgentContext`) | WhatsApp (`WaState`) |
+|------|--------------------------|----------------------|
+| `mode` | `"auto"` | `"manual"` |
+| `routerModel` | `DEFAULT_ROUTER_MODEL` | `undefined` |
+| `coreModel` | `DEFAULT_CORE_MODEL` | `undefined` |
+| `silentMode` | `true` | `false` |
+| `workDir` | `TempNote`（啟動後自動選取） | `defaultWorkDir ?? ""`（由 `create()` 推算） |
+| `sessionIcon` | 從 `ICON_POOL` 選取 | 不適用 |
+| `sessionVersion` | `0` | 不適用 |
+
+> **說明**：WhatsApp 通道預設 `manual` 模式且 Router/Core 均未設定，使用者必須先執行 `/model auto` 並設定 `config_router` / `config_core` 才能啟用 Auto Mode。
+
+#### 11.2.2 `WhatsAppClient` 特性 (`src/whatsapp/client.ts`)
+
+| 特性 | 說明 |
+|------|------|
+| 連線模式 | Baileys multi-file auth + Linked Device |
+| QR 顯示 | `qrcode-terminal` 在終端輸出 QR Code |
+| 斷線重連 | 非 `loggedOut` 時 5 秒後自動重連 |
+| 媒體下載 | 圖片 / 文件會存到 `wa-media` 目錄後交由 service 使用 |
+| Presence | 支援 `composing` / `available` 指示 |
+| Reaction | 可對訊息補送 emoji reaction |
+
+#### 11.2.3 WhatsApp 指令
+
+| 指令 | 說明 |
+|------|------|
+| `/help` | 顯示 WhatsApp 指令說明 |
+| `/info` | 顯示目前狀態 |
+| `/model [entry]` | 查詢或切換模型 |
+| `/model auto` | 啟用 Auto Mode |
+| `/model config_router <entry>` | 設定 Router 模型 |
+| `/model config_core <entry>` | 設定 Core 模型 |
+| `/project` / `/project <編號>` | 列出或切換工作區 |
+| `/clear` | 清除對話 |
+| `/silent` | 切換靜默模式 |
+| `/allowall` | 切換狀態旗標（目前不影響實際批准流程） |
+| `/router <問題>` | 用 Router 模型執行單次對話 |
+| `/newproject <名稱>` | 建立新專案**並自動切換**（與 Telegram 不同，WA 版會立即將 `workDir` 設為新目錄） |
+| `/quit` | 關閉 WhatsApp 服務 |
+
+#### 11.2.4 WhatsApp 目前的批准行為
+
+目前 `WhatsAppService.ensureSession()` 建 session 時：
+
+- `onPermissionRequest` 固定回傳 `approved`
+- `onPreToolUse` 固定回傳 `allow`
+- 沒有 Telegram 那種 inline keyboard 逐次審批 UI
+
+因此 **WhatsApp 通道目前的實際行為是工具操作一律自動批准**；`/allowall` 只會切換狀態顯示，尚未接上互動式確認流程。
+
+#### 11.2.5 WhatsApp 訊息流程
+
+```mermaid
+flowchart TD
+    A[Baileys message event] --> B{sender 為 owner?}
+    B -->|否| Z[忽略]
+    B -->|是| C[markAsRead]
+    C --> D{指令?}
+    D -->|是| E[handleCommand]
+    D -->|否| F[蒐集 mediaItems]
+    F --> G[evaluatePrompt]
+    G --> H{Auto Mode?}
+    H -->|是| I[classifyIntent]
+    H -->|否| J[ensureSession]
+    I --> J
+    J --> K[session.send]
+    K --> L[assistant/tool/session.idle events]
+    L --> M[回傳 WhatsApp 訊息 / reaction / memory append]
+```
+
+### 11.3 Telegram 整合 (`src/telegram/`)
+
+#### 11.3.1 TelegramApi 類別 (`src/telegram/api.ts`)
 
 ```typescript
 constructor(options: { token: string })
 ```
-
-#### API 方法
 
 | 方法 | 說明 |
 |------|------|
@@ -1734,17 +1989,22 @@ constructor(options: { token: string })
 | `editMessageTextPlain(options)` | 編輯訊息（純文字） |
 | `answerCallbackQuery(id)` | 回應回調查詢 |
 | `setMessageReaction(options)` | 設定表情反應 |
+| `sendChatAction(options)` | 發送 typing 等聊天動作 |
 | `getFile(file_id)` | 取得檔案元資料 |
 | `getChat(chat_id)` | 取得聊天室資訊（含可用表情） |
 | `downloadFile(filePath, maxBytes)` | 下載檔案（含大小限制） |
 
-#### 輔助匯出
+#### 11.3.2 TelegramAdapter (`src/telegram/adapter.ts`)
 
-| 函式 | 說明 |
-|------|------|
-| `getTelegramHost()` | 回傳 Telegram API 主機名稱 `"api.telegram.org"` |
+`TelegramAdapter` 實作 `ChannelAdapter`，負責：
 
-### 10.2 Markdown 轉換 (`src/util/markdown.ts`)
+- MarkdownV2 格式化與 fallback 純文字
+- 分段發送（4096 字元上限）
+- 訊息編輯
+- emoji reaction
+- typing indicator
+
+### 11.4 Markdown 轉換
 
 #### `markdownToTelegram(text)`
 
@@ -1756,13 +2016,13 @@ constructor(options: { token: string })
 | ` ```區塊``` ` | ` ```區塊``` ` |
 | 特殊字元 | 跳脫 MarkdownV2 |
 
-#### `splitLongMessage(text, limit?)`
+#### `markdownToWhatsApp(text)`
 
-- 預設限制：4096 字元
-- 優先在換行處分割
-- 保持程式碼區塊完整性
+- 將 Markdown 轉為 WhatsApp 可讀文字格式
+- 配合 `splitLongMessage(text, 4000)` 控制訊息長度
+- WhatsApp 不支援編輯已送訊息，adapter 的 `editMessage()` 為 no-op
 
-### 10.4 訊息發送策略
+### 11.5 Telegram 訊息發送策略
 
 ```mermaid
 flowchart TD
@@ -1781,7 +2041,7 @@ flowchart TD
     K -->|否| I
 ```
 
-### 10.5 核心 Telegram 型別
+### 11.6 核心 Telegram 型別
 
 ```typescript
 type TelegramUpdate = {
@@ -1870,9 +2130,9 @@ type MessageReaction = {
 
 ---
 
-## 11. 設定管理
+## 12. 設定管理
 
-### 11.1 環境變數
+### 12.1 環境變數
 
 | 變數 | 必要 | 說明 | 預設值 |
 |------|------|------|--------|
@@ -1884,10 +2144,14 @@ type MessageReaction = {
 | `TELETOPAZ_LOG_LEVEL` | — | 日誌等級 | `info` |
 | `TELETOPAZ_LOG_DIR` | — | 日誌輸出目錄 | `logs/` |
 | `TELETOPAZ_DEFAULT_MODEL` | — | 預設模型 | — |
+| `TELETOPAZ_WA_OWNER_JIDS` | — | WhatsApp 擁有者 JID / 電話（逗號分隔）；未設定則不啟動 WhatsApp | — |
+| `TELETOPAZ_WA_AUTH_DIR` | — | WhatsApp 認證資料目錄 | `~/.teletopaz/whatsapp-auth` |
+| `TELETOPAZ_WA_MODEL` | — | WhatsApp 頻道預設模型 | `TELETOPAZ_DEFAULT_MODEL` |
+| `TELETOPAZ_USE_PTY` | — | `1` 時 Gemini provider 改走 `GeminiPtyClient` | `0` / 未設定 |
 | `TELETOPAZ_SANDBOX` | — | 沙盒環境變數名稱（內部使用，`isSandboxEnabled()` 永遠回傳 `true`，此變數目前無功能效果） | — |
 | `TELETOPAZ_SANDBOX_ACTIVE` | — | 沙盒啟動標記（內部使用，由沙盒啟動流程設定為 `"1"`） | — |
 
-### 11.2 模型設定 (`src/config/models.ts`)
+### 12.2 模型設定 (`src/config/models.ts`)
 
 #### 核心型別
 
@@ -1913,6 +2177,7 @@ type SupportedModel = {
 | `gmcli:gemini-3.1-pro-preview` | Gemini (Google) | Core |
 | `cccli:claude-opus-4.6` | Claude Code (Anthropic) | Core |
 | `cccli:claude-sonnet-4.6` | Claude Code (Anthropic) | Core |
+| `cccli:claude-haiku-4.5` | Claude Code (Anthropic) | Router / 輕量 |
 
 #### 顯示格式
 
@@ -1936,7 +2201,9 @@ type SupportedModel = {
 | `getDefaultModel(models)` | 取得預設模型 |
 | `getDefaultModelEnvName()` | 回傳預設模型環境變數名稱 |
 
-### 11.3 目錄存取控制 (`src/config/directories.ts`)
+> `DEFAULT_ROUTER_MODEL = ctcli:gpt-5-mini`、`DEFAULT_CORE_MODEL = ctcli:gpt-5.4`、`DEFAULT_MODEL_ENTRY = DEFAULT_CORE_MODEL`。
+
+### 12.3 目錄存取控制 (`src/config/directories.ts`)
 
 | 函式 | 說明 |
 |------|------|
@@ -1946,7 +2213,7 @@ type SupportedModel = {
 
 > 注：`resolvePatternRoot(pattern)` 與 `isWithinDirectory(root, target)` 為模組內部私有函式，分別用於擷取 Glob 前的靜態路徑和檢查目標是否在目錄內。
 
-### 11.4 密鑰管理 (`src/config/secrets.ts`)
+### 12.4 密鑰管理 (`src/config/secrets.ts`)
 
 #### 匯出型別
 
@@ -1965,12 +2232,15 @@ type SecretKeys = {
 |------|------|
 | `loadSecrets(options?)` | 從環境變數/Keychain 載入密鑰，回傳 `SecretKeys` |
 | `loadConfiguredRuntimeConfig(options?)` | 載入執行時設定（含舊版 Keychain 遷移） |
+| `saveDirectoryPatterns(value)` | 將 `directory_patterns` 寫入 Keychain |
 | `saveSecret(key, value)` | 儲存至 Keychain |
+| `saveWaOwnerJids(value)` | 儲存 WhatsApp owner JIDs 至 Keychain |
+| `loadWaOwnerJids()` | 從 Keychain 讀取 WhatsApp owner JIDs |
 | `getSecretServiceName()` | 回傳服務名稱 `"teletopaz"` |
 
-**Keychain 鍵名**：`bot_token`, `owner_chat_id`, `owner_user_id`
+**Keychain 鍵名**：`bot_token`, `owner_chat_id`, `owner_user_id`, `directory_patterns`, `wa_owner_jids`
 
-### 11.5 執行時設定 (`src/config/runtime-config.ts`)
+### 12.5 執行時設定 (`src/config/runtime-config.ts`)
 
 ```typescript
 type RuntimeConfig = {
@@ -1980,7 +2250,8 @@ type RuntimeConfig = {
 
 - **儲存路徑**：`~/.teletopaz/runtime-config.json`
 - **檔案權限**：`0o600`（僅擁有者可讀寫）
-- **遷移**：若檔案不存在但 Keychain 有舊版設定，自動遷移
+- **讀取順序**：`TELETOPAZ_DIRECTORY_PATTERNS` 優先，其次 Keychain `directory_patterns`，最後才是 runtime-config 檔案
+- **遷移**：若檔案不存在但有 legacy loader，會將遺留設定寫回新檔案
 
 #### 匯出函式
 
@@ -1992,9 +2263,9 @@ type RuntimeConfig = {
 
 ---
 
-## 12. 工具程式與輔助模組
+## 13. 工具程式與輔助模組
 
-### 12.1 日誌系統 (`src/util/logger.ts`)
+### 13.1 日誌系統 (`src/util/logger.ts`)
 
 **類別**：`Logger`
 
@@ -2007,7 +2278,7 @@ type RuntimeConfig = {
 | 非同步寫入 | 佇列式避免阻塞 |
 | `flush()` | 等待所有待寫入完成 |
 
-### 12.2 錯誤分類 (`src/util/errors.ts`)
+### 13.2 錯誤分類 (`src/util/errors.ts`)
 
 #### 匯出型別
 
@@ -2025,13 +2296,14 @@ type RepeatedLogState = {
 |------|------|
 | `isConnectionDisposedError(error)` | 偵測串流/連線中斷錯誤（`ERR_STREAM_DESTROYED` 或 code `-32097`） |
 | `isTelegramReactionInvalid(error)` | 偵測 `REACTION_INVALID` 錯誤 |
+| `isTelegramNotModifiedError(error)` | 偵測 `Bad Request: message is not modified` 錯誤（Telegram 編輯訊息內容未變時回傳） |
 | `extractNetworkErrorSummary(error)` | 擷取網路錯誤碼 + 目標（遞迴搜尋 error chain） |
 | `isTransientTelegramNetworkError(error)` | 判斷暫時性網路錯誤 |
 | `consumeRepeatedLog(state, key, now, window)` | 去重複日誌（時間窗口內） |
 
 **暫時性錯誤碼**：`ETIMEDOUT`, `ENETUNREACH`, `ECONNREFUSED`, `EAI_AGAIN`, `ENOTFOUND`, `ECONNRESET`
 
-### 12.3 格式化 (`src/util/format.ts`)
+### 13.3 格式化 (`src/util/format.ts`)
 
 | 函式 | 說明 |
 |------|------|
@@ -2040,7 +2312,7 @@ type RepeatedLogState = {
 | `formatChatDisplayName(chat)` | 從聊天室擷取顯示名稱 |
 | `formatJsonResult(input)` | JSON 美化列印或回傳字串 |
 
-### 12.4 圖片處理 (`src/util/images.ts`)
+### 13.4 圖片處理 (`src/util/images.ts`)
 
 ```typescript
 async function reencodePhoto(buffer: Buffer): Promise<Buffer>
@@ -2050,7 +2322,7 @@ async function reencodePhoto(buffer: Buffer): Promise<Buffer>
 - 自動旋轉（根據 EXIF）
 - 轉換為 JPEG，80% 品質，mozJPEG
 
-### 12.5 App Data 目錄 (`src/util/app-data.ts`)
+### 13.5 App Data 目錄 (`src/util/app-data.ts`)
 
 ```typescript
 function resolveAppDataDir(env?): string
@@ -2060,7 +2332,7 @@ function resolveAppDataDir(env?): string
 1. `TELETOPAZ_DATA_DIR` 環境變數
 2. 預設 `~/.teletopaz`
 
-### 12.6 用量追蹤 (`src/services/quota.ts`)
+### 13.6 用量追蹤 (`src/services/quota.ts`)
 
 **類別**：`QuotaService`  
 **單例匯出**：`export const quotaService = new QuotaService()`
@@ -2086,7 +2358,7 @@ type UsageStats = {
 
 > **注意**：目前 `checkQuota` 始終回傳 `{ allowed: true, remaining: 9999 }`，尚未實作配額限制邏輯。
 
-### 12.7 Skills 系統
+### 13.7 Skills 系統
 
 Skills 僅在 **Copilot** 供應商下啟用。`collectSkillDirectories(cwd)` 會蒐集以下兩類目錄：
 
@@ -2103,7 +2375,7 @@ Skills 僅在 **Copilot** 供應商下啟用。`collectSkillDirectories(cwd)` �
 
 建立 session 時透過 `createSession({ skillDirectories })` 傳入 Copilot SDK。Gemini 建立 session 時不傳入此參數。
 
-### 12.8 TempNote 自動建立
+### 13.8 TempNote 自動建立
 
 啟動時 `ensureTempNoteDirectory(dirs)` 會在允許的目錄列表中尋找名為 `TempNote` 的目錄：
 
@@ -2113,7 +2385,7 @@ Skills 僅在 **Copilot** 供應商下啟用。`collectSkillDirectories(cwd)` �
 
 啟動後自動將 `TempNote` 設為預設 `workDir`（若存在）。
 
-### 12.9 `stripAttachmentContext` 輔助函式
+### 13.9 `stripAttachmentContext` 輔助函式
 
 ```typescript
 function stripAttachmentContext(prompt: string): string
@@ -2123,17 +2395,22 @@ function stripAttachmentContext(prompt: string): string
 
 ---
 
-## 13. 常數與限制
+## 14. 常數與限制
 
 | 常數 | 值 | 說明 |
 |------|-----|------|
 | `MESSAGE_LIMIT` | 4,096 | Telegram 訊息長度上限 |
+| `MSG_LIMIT` | 4,000 | WhatsApp 訊息長度上限 |
 | `PENDING_LIMIT` | 15 | 每 Chat 最大佇列任務數 |
+| `MAX_PENDING` | 15 | WhatsApp 每 JID 最大佇列任務數 |
 | `MAX_ATTACHMENTS` | 8 | 每 Session 最大圖片數 |
 | `MAX_ATTACHMENT_BYTES` | 8 MB | 單張圖片大小上限 |
-| `TOOL_PREVIEW_LEN` | 150 | 工具執行預覽字元數 |
+| `TOOL_PREVIEW_LEN` (Telegram) | 150 | Telegram 工具執行預覽字元數 |
+| `TOOL_PREVIEW_LEN` (WhatsApp) | 300 | WhatsApp 工具結果摘要長度 |
 | `TOOL_CONFIRM_TIMEOUT_MS` | 120,000 (2 分鐘) | 使用者批准逾時 |
 | `CLI_TIMEOUT_MS` (Gemini) | 120,000 (2 分鐘) | Gemini CLI 呼叫逾時 |
+| `CLI_TIMEOUT_MS` (Claude) | 300,000 (5 分鐘) | Claude Code CLI 呼叫逾時 |
+| `CLASSIFIER_TIMEOUT_MS` (WhatsApp) | 30,000 (30 秒) | WhatsApp 意圖分類逾時 |
 | `POLLING_ERROR_DEDUPE_WINDOW_MS` | 15,000 (15 秒) | 錯誤去重複時間窗口 |
 | `DEFAULT_ROUTER_MODEL` | `ctcli:gpt-5-mini` | Auto Mode 預設 Router |
 | `DEFAULT_CORE_MODEL` | `ctcli:gpt-5.4` | Auto Mode 預設 Core |
@@ -2141,7 +2418,7 @@ function stripAttachmentContext(prompt: string): string
 | `DEFAULT_MAX_ENTRIES` (記憶) | 24 | 持久化記憶最大筆數 |
 | `DEFAULT_MAX_CHARS` (記憶) | 400 | 每筆記憶最大字元數 |
 | `modelsTtlMs` | 300,000 (5 分鐘) | 模型快取 TTL |
-| `ROUTER_MODEL_PATTERN` | `/(?:^\|[-.])(mini\|flash\|lite)(?:$\|[-.])/i` | Router 模型篩選正則 |
+| `ROUTER_MODEL_PATTERN` | `/(?:^|[-.])(mini|flash|lite|haiku)(?:$|[-.])/i` | Router 模型篩選正則 |
 | `ICON_POOL` | 10 個 emoji | Session 圖示池 |
 | `SERVICE_NAME` (Keychain) | `"teletopaz"` | Keychain 服務名稱 |
 | `SESSION_IDLE_REBUILD_MS` | `3_600_000` (1 小時) | 閒置超時 → 主動重建 session |
@@ -2155,13 +2432,13 @@ function stripAttachmentContext(prompt: string): string
 
 ---
 
-## 14. 熱重啟與自動退版
+## 15. 熱重啟與自動退版
 
-### 14.1 概觀
+### 15.1 概觀
 
 TeleTopaz 支援透過 `/restart` 指令進行熱重啟，搭配 Launcher 包裹程序自動重建並啟動新版本，若新版本異常可自動退回前一版本。
 
-### 14.2 架構
+### 15.2 架構
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -2178,7 +2455,7 @@ TeleTopaz 支援透過 `/restart` 指令進行熱重啟，搭配 Launcher 包裹
 └─────────────────────────────────────────────────┘
 ```
 
-### 14.3 `/restart` 指令流程
+### 15.3 `/restart` 指令流程
 
 ```mermaid
 sequenceDiagram
@@ -2203,7 +2480,7 @@ sequenceDiagram
     end
 ```
 
-### 14.4 RestartState 型別
+### 15.4 RestartState 型別
 
 ```typescript
 type RestartState = {
@@ -2225,9 +2502,9 @@ type RestartState = {
 | `loadRestartState()` | 讀取並反序列化 RestartState，回傳 `RestartState \| null` |
 | `clearRestartState()` | 刪除 `restart-state.json` 狀態檔案 |
 | `getGitInfo(projectDir)` | 取得當前 Git SHA 與未提交變更狀態 |
-| `performGitRollback(projectDir, state)` | 執行 `git reset --hard {previousGitSha}` 退版 |
+| `performGitRollback(projectDir, state)` | 若重啟前有未提交變更則 `git reset --hard {previousGitSha}`；否則 `git reset --hard HEAD~1` |
 
-### 14.5 自動退版機制
+### 15.5 自動退版機制
 
 | 條件 | 動作 |
 |------|------|
@@ -2242,7 +2519,7 @@ type RestartState = {
 | 2 | `triggeredBy === "user"` 且 `rollbackCount < 1` | `handleRestartRollback()` → 退版 + `process.exit(75)` |
 | 3 | 其他（已退版仍逾時） | `clearRestartState()` → `process.exit(1)` |
 
-### 14.6 package.json 啟動腳本
+### 15.6 package.json 啟動腳本
 
 | 腳本 | 指令 | 說明 |
 |------|------|------|
@@ -2255,6 +2532,8 @@ type RestartState = {
 
 | 版本 | 日期 | 變更說明 |
 |------|------|----------|
+| 0.3.2 | 2026-04-18 | 規格精準校對：新增 §4.3 快捷按鈕（📔日記/📓筆記）文件；PTY 終端模擬環境變數表（TERM=xterm-ghostty 等）；Gemini PTY `queryProviderInfo` 版本修正為 `CLI-PTY-Wrapper`；Claude `resolveModelFlag` 與 `writeClaudeSettingsFile` 機制文件；sandbox 白名單新增 Claude 暫存路徑（`/private/tmp/claude-{uid}`、`claude-settings-*`、`claude-*-cwd`）；新增護欄 SAFE\_TARGET\_CONTEXTS 安全上下文豁免機制文件（8 個目標詞 × 安全上下文清單）；WhatsApp 預設狀態差異比較表（mode=manual, silentMode=false, routerModel/coreModel=undefined）；WhatsApp `/newproject` 自動切換行為註記；`isTelegramNotModifiedError` 函式文件；常數表新增 `CLI_TIMEOUT_MS` (Claude)=300,000 與 `CLASSIFIER_TIMEOUT_MS` (WA)=30,000 |
+| 0.3.1 | 2026-04-17 | 依目前程式碼重新校對規格：補上 WhatsApp / ChannelAdapter / Provider Factory / `TELETOPAZ_USE_PTY` 與 WA 相關環境變數；修正 Auto Mode 預設 Core 為 `ctcli:gpt-5.4`；補上 `cccli:claude-haiku-4.5`；修正章節編號（新增 §11 雙通道整合、後續章節順延）；補充 Claude 相關 sandbox 白名單與實際 `performGitRollback()` 行為；常數表新增 WhatsApp 上限與更新 `ROUTER_MODEL_PATTERN` 為含 `haiku` |
 | 0.3.0 | 2026-03-18 | 新增 Claude Code CLI 供應商（`cccli`，`claude-code` ProviderType）；新增 Gemini PTY 工作階段（`gemini/pty-session.ts`，node-pty 驅動）；新增 PTY 模組（`src/pty/`，含 runner/session-manager/ansi-parser/human-typist/sanitizer/request-queue/session-pacer）；`AgentContext` 新增 `sessionVersion`、`silentMode`、`silentAnchorMessageId`、`lastProactiveRebuildNotice` 欄位；新增 `/silent` 安靜模式指令（工具狀態折疊至錨點訊息）；新增 `/router` 指令（以 routerModel 執行單次對話並自動還原）；主動重建通知去重複機制（`lastProactiveRebuildNotice` 編輯計數）；TelegramApi 啟用 Happy Eyeballs；`errors.ts` 新增 "Session not found:" 錯誤處理；模型清單新增 `cccli:claude-opus-4.6`、`cccli:claude-sonnet-4.6`；`CliProviderLabel` 新增 `cccli`；新增 §8 PTY 模組章節；目錄新增至 34 個測試檔案 |
 | 0.2.8 | 2026-03-15 | 建構子新增 `startTimestamp` 參數文件；陳舊事件過濾機制說明；圖片附件磁碟儲存路徑文件；Copilot GitHub Token 環境變數解析順序（`COPILOT_GITHUB_TOKEN` → `GH_TOKEN` → `GITHUB_TOKEN`）；`normalizeModelInfos` 欄位解析順序；Gemini `queryProviderInfo()` 靜態回傳值與附件注入格式文件；供應商比較表新增附件/Skills 差異與權限流差異表；語意分析完整列出 12 組繞過短語、18 組動作詞、24 組敏感目標詞；工具權限流程圖拆分為 Copilot 雙層（`onPermissionRequest` + `onPreToolUse`）與 Gemini 單層兩版；新增 §12.7 Skills 系統、§12.8 TempNote 自動建立、§12.9 `stripAttachmentContext` 輔助函式；`checkQuota` 始終放行說明；常數表新增 `APP_ROOT`、`BUNDLED_SKILLS_PATH`、處理中計時器 20 秒延遲；bot.ts 行數更新至 2,723；SDK 解析修正為 `import.meta.resolve`；移除不存在的 protocol v3 宣稱；`composePrompt` 描述修正為路徑描述而非 data URL；補齊 `clearRestartState()` 與完整 restart.ts 函式表；`handleRestartTimeout` 三分支邏輯完整記錄 |
 | 0.2.7 | 2026-03-15 | 主動偵測新增靜默時段：00:00–07:59 UTC+8 重建不發送通知（`isQuietHours`）；新增 §6.2.1 通知靜默時段章節；更新 §6.4 流程圖含靜默判斷分支 |
