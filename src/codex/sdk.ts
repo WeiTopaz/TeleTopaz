@@ -4,16 +4,25 @@ import type { AiAttachment, AiClient, AiSession, AiEvent, AiSessionOptions, AiPr
 const retryBackoffsMs = [1000, 2000, 5000];
 const CLI_TIMEOUT_MS = 300_000; // Codex 可能需要較長時間（多輪工具呼叫）
 
-function isRetryableError(err: Error | null): boolean {
+// 本地 CLI 整體 timeout 訊息；屬於「agent 卡死」而非網路暫態，不重試。
+const LOCAL_CLI_TIMEOUT_MARKER = "Codex CLI exceeded";
+
+export function isRetryableError(err: Error | null): boolean {
   if (!err) return false;
   const message = err.message;
+
+  // 本地 CLI timeout 代表 agent 陷入工具循環或真的需要更久；重試只會讓人再等 5 分鐘。
+  if (message.includes(LOCAL_CLI_TIMEOUT_MARKER)) return false;
+
   return (
     message.includes("GOAWAY") ||
     message.includes("connection reset") ||
     message.includes("connection refused") ||
     message.includes("connection terminated") ||
     message.includes("EOF") ||
-    message.includes("timeout") ||
+    message.includes("ETIMEDOUT") ||
+    message.includes("socket timeout") ||
+    message.includes("connection timeout") ||
     message.includes("overloaded")
   );
 }
@@ -219,6 +228,9 @@ export class CodexSdkSession implements AiSession {
 
       const abortHandler = () => {
         if (!child.killed) child.kill("SIGTERM");
+        // 斷開 stdio pipe，避免 kill 到真正退出之間仍把殘留 JSONL flush 成 event
+        child.stdout?.destroy();
+        child.stderr?.destroy();
         finish(new Error("aborted"));
       };
 
@@ -226,7 +238,9 @@ export class CodexSdkSession implements AiSession {
 
       const timeoutTimer = setTimeout(() => {
         if (!child.killed) child.kill("SIGKILL");
-        finish(new Error("timeout: Codex CLI exceeded " + CLI_TIMEOUT_MS + "ms"));
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish(new Error("timeout: " + LOCAL_CLI_TIMEOUT_MARKER + " " + CLI_TIMEOUT_MS + "ms"));
       }, CLI_TIMEOUT_MS);
 
       child.stdout.setEncoding("utf8");
