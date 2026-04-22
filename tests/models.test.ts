@@ -12,7 +12,7 @@ describe("model config", () => {
     process.env.TELETOPAZ_DEFAULT_MODEL = originalDefaultModel;
   });
 
-  it("matches REF model inventory with ctcli, gmcli and cccli aliases", () => {
+  it("matches the TeleTopaz model inventory with ctcli, gmcli, cccli and cdcli aliases", () => {
     const entries = modelConfig.getAllModels().map((item) => item.entry ?? `${item.provider}:${item.model}`);
 
     expect(entries).toEqual([
@@ -23,11 +23,13 @@ describe("model config", () => {
       "gmcli:gemini-3.1-pro-preview",
       "cccli:claude-opus-4.6",
       "cccli:claude-sonnet-4.6",
-      "cccli:claude-haiku-4.5"
+      "cccli:claude-haiku-4.5",
+      "cdcli:gpt-5.4",
+      "cdcli:gpt-5.4-mini"
     ]);
   });
 
-  it("loads the REF provider-specific model lists", async () => {
+  it("loads the TeleTopaz provider-specific model lists", async () => {
     await expect(modelConfig.loadSupportedModels("copilot")).resolves.toEqual([
       "gpt-5.4",
       "gpt-5-mini",
@@ -41,6 +43,10 @@ describe("model config", () => {
       "claude-opus-4.6",
       "claude-sonnet-4.6",
       "claude-haiku-4.5"
+    ]);
+    await expect(modelConfig.loadSupportedModels("codex")).resolves.toEqual([
+      "gpt-5.4",
+      "gpt-5.4-mini"
     ]);
   });
 
@@ -62,14 +68,14 @@ describe("model config", () => {
     expect(modelConfig.getDefaultModel(["gpt-5.4", "claude-opus-4.6"])).toBe("claude-opus-4.6");
   });
 
-  it("uses ctcli:gpt-5.4 as the default core model entry", () => {
-    expect(modelConfig.DEFAULT_CORE_MODEL).toBe("ctcli:gpt-5.4");
-    expect(modelConfig.DEFAULT_MODEL_ENTRY).toBe("ctcli:gpt-5.4");
+  it("uses cdcli:gpt-5.4 as the default core model entry", () => {
+    expect(modelConfig.DEFAULT_CORE_MODEL).toBe("cdcli:gpt-5.4");
+    expect(modelConfig.DEFAULT_MODEL_ENTRY).toBe("cdcli:gpt-5.4");
   });
 
   it("uses provider:model entries for the default auto router/core pair", () => {
-    expect(modelConfig.DEFAULT_ROUTER_MODEL).toBe("ctcli:gpt-5-mini");
-    expect(modelConfig.DEFAULT_CORE_MODEL).toBe("ctcli:gpt-5.4");
+    expect(modelConfig.DEFAULT_ROUTER_MODEL).toBe("cdcli:gpt-5.4-mini");
+    expect(modelConfig.DEFAULT_CORE_MODEL).toBe("cdcli:gpt-5.4");
   });
 
   it("returns gpt-5.4 when the default core model is in the list", () => {

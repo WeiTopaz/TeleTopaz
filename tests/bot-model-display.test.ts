@@ -109,11 +109,49 @@ describe("TeleTopazService model display", () => {
         "gmcli:gemini-3.1-pro-preview",
         "cccli:claude-opus-4.6",
         "cccli:claude-sonnet-4.6",
-        "cccli:claude-haiku-4.5"
+        "cccli:claude-haiku-4.5",
+        "cdcli:gpt-5.4",
+        "cdcli:gpt-5.4-mini"
       ])
     );
     expect(labels.join("\n")).not.toContain("gpt-5.2-codex");
     expect(labels.join("\n")).not.toContain("gemini-3-flash-preview");
+  });
+
+  it("uses the current provider when formatting a bare active model name", () => {
+    const service = new TeleTopazService(createApi(), "1", "1", 0);
+    const state = (service as unknown as {
+      getOrCreateState: (chatId: number) => Record<string, unknown>;
+    }).getOrCreateState(1);
+
+    state.mode = "manual";
+    state.provider = "codex";
+    state.model = "gpt-5.4";
+
+    const text = (service as unknown as {
+      prepareOutgoingRaw: (chatId: number, text: string) => string;
+    }).prepareOutgoingRaw(1, "完成");
+
+    expect(text).toContain("💎TeleTopaz in 尚未選擇專案 / cdcli:gpt-5.4");
+  });
+
+  it("keeps the active auto-routed Codex model on the cdcli prefix", () => {
+    const service = new TeleTopazService(createApi(), "1", "1", 0);
+    const state = (service as unknown as {
+      getOrCreateState: (chatId: number) => Record<string, unknown>;
+    }).getOrCreateState(1);
+
+    state.mode = "auto";
+    state.provider = "codex";
+    state.model = "gpt-5.4";
+    state.routerModel = "ctcli:gpt-5-mini";
+    state.coreModel = "cdcli:gpt-5.4";
+
+    const text = (service as unknown as {
+      prepareOutgoingRaw: (chatId: number, text: string) => string;
+    }).prepareOutgoingRaw(1, "完成");
+
+    expect(text).toContain("💎TeleTopaz in 尚未選擇專案 / Auto:cdcli:gpt-5.4");
   });
 
   it("keeps gmcli core models out of the router picker and inside the core picker", async () => {

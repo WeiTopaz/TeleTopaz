@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createProviderClient } from "../src/provider/factory.js";
 import { ClaudeCodeSdkClient } from "../src/claude/sdk.js";
+import { CodexSdkClient } from "../src/codex/sdk.js";
 import { CopilotSdkClient } from "../src/copilot/sdk.js";
 import { GeminiSdkClient } from "../src/gemini/sdk.js";
 import { GeminiPtyClient } from "../src/gemini/pty-session.js";
@@ -18,6 +19,11 @@ describe("createProviderClient", () => {
   it("returns ClaudeCodeSdkClient for claude-code", () => {
     const client = createProviderClient("claude-code");
     expect(client).toBeInstanceOf(ClaudeCodeSdkClient);
+  });
+
+  it("returns CodexSdkClient for codex", () => {
+    const client = createProviderClient("codex");
+    expect(client).toBeInstanceOf(CodexSdkClient);
   });
 
   it("returns GeminiSdkClient for gemini when TELETOPAZ_USE_PTY is not set", () => {

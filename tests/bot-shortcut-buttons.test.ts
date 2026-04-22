@@ -85,7 +85,7 @@ describe("shortcut buttons", () => {
 
     await (service as any).handleShortcut(1, "diary");
 
-    expect((service as any).createSession).toHaveBeenCalledWith(1, "/home/user/MyDiary", "gpt-5-mini");
+    expect((service as any).createSession).toHaveBeenCalledWith(1, "/home/user/MyDiary", "gpt-5.4-mini");
     expect((service as any).sendStatusFooter).toHaveBeenCalledWith(1);
   });
 

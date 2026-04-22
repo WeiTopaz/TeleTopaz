@@ -56,6 +56,36 @@ async function createSessionOptions() {
 }
 
 describe("TeleTopazService tool permissions", () => {
+  it("allows Codex sessions to be created through the standard provider pipeline", async () => {
+    const session: AiSession = {
+      onEvent: vi.fn(),
+      send: vi.fn().mockResolvedValue(undefined),
+      sendAndWait: vi.fn().mockResolvedValue(undefined),
+      destroy: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined)
+    };
+    const client = createClient(session);
+    const service = new TeleTopazService(createApi(), "1", "1", 0);
+    const safeSend = vi.fn().mockResolvedValue(undefined);
+
+    (service as unknown as { loadAllowedDirectories: () => Promise<string[]> }).loadAllowedDirectories = vi.fn().mockResolvedValue(["/tmp/project"]);
+    (service as unknown as { getModels: (provider?: string) => Promise<string[]> }).getModels = vi.fn().mockResolvedValue(["gpt-5.4", "gpt-5.4-mini"]);
+    (service as unknown as { createProviderClient: () => AiClient }).createProviderClient = vi.fn().mockReturnValue(client);
+    (service as unknown as { safeSend: typeof safeSend }).safeSend = safeSend;
+    (service as unknown as { sessionMemory: { buildContext: (scope: unknown) => Promise<string | undefined> } }).sessionMemory = {
+      buildContext: vi.fn().mockResolvedValue(undefined)
+    };
+
+    await (service as unknown as {
+      createSession: (chatId: number, cwd: string, model?: string) => Promise<void>;
+    }).createSession(1, "/tmp/project", "cdcli:gpt-5.4");
+
+    expect((service as unknown as { createProviderClient: ReturnType<typeof vi.fn> }).createProviderClient).toHaveBeenCalledWith("codex");
+    expect(client.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gpt-5.4" })
+    );
+  });
+
   it("denies read tools that target files outside the selected workspace", async () => {
     const options = await createSessionOptions();
     const onPreToolUse = options?.hooks?.onPreToolUse;

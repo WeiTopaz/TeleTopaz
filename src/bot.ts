@@ -51,6 +51,7 @@ import {
 import {
   DEFAULT_CORE_MODEL,
   DEFAULT_ROUTER_MODEL,
+  findProvidersForModel,
   formatModelEntry as formatConfiguredModelEntry,
   getAllModels,
   getDefaultModel,
@@ -96,13 +97,13 @@ const SHORTCUT_BUTTONS: ShortcutConfig[] = [
     label: "📔 日記",
     callbackKey: "diary",
     targetDirName: "MyDiary",
-    modelEntry: "ctcli:gpt-5-mini",
+    modelEntry: "cdcli:gpt-5.4-mini",
   },
   {
     label: "📓 筆記",
     callbackKey: "notebook",
     targetDirName: "MyNotebook",
-    modelEntry: "ctcli:gpt-5-mini",
+    modelEntry: "cccli:claude-sonnet-4.6",
   },
 ];
 
@@ -782,7 +783,8 @@ export class TeleTopazService {
     aiAttachments?: AiAttachment[]
   ): Promise<SendPromptResult> {
     this.preparePromptDispatch(state, prompt, replyTo);
-    await quotaService.increment(String(state.chatId), state.provider, state.model ?? "unknown");
+    const quotaModelEntry = state.model ? this.formatModelEntry(state.provider, state.model) : "unknown";
+    await quotaService.increment(String(state.chatId), state.provider, quotaModelEntry);
 
     const processingText = `⏳處理中：${prompt.slice(0, 80)}`;
     const processing = state.silentMode
@@ -1990,6 +1992,7 @@ export class TeleTopazService {
 
     const state = this.getOrCreateState(chatId);
     const parsedRequestedModel = model?.includes(":") ? parseConfiguredModelEntry(model) : undefined;
+
     if (parsedRequestedModel && state.provider !== parsedRequestedModel.provider) {
       state.provider = parsedRequestedModel.provider;
     }
@@ -2831,9 +2834,9 @@ export class TeleTopazService {
     return formatConfiguredModelEntry(provider, model);
   }
 
-  private formatResolvedModelEntry(model: string | undefined): string {
+  private formatResolvedModelEntry(model: string | undefined, preferredProvider?: ProviderType): string {
     if (!model) return "未設定";
-    const parsed = parseConfiguredModelEntry(model);
+    const parsed = parseConfiguredModelEntry(model, preferredProvider);
     return this.formatModelEntry(parsed.provider, parsed.model);
   }
 
@@ -2841,13 +2844,14 @@ export class TeleTopazService {
     if (model.includes(":")) {
       return normalizeConfiguredModelEntry(model, this.formatResolvedModelEntry(parseConfiguredModelEntry(model).model));
     }
+    if (findProvidersForModel(model).length > 1) return model;
     return this.formatResolvedModelEntry(model);
   }
 
   private formatStateModelLabel(state: AgentContext, manualModelOverride?: string): string {
     if (state.mode === "auto") {
       const activeModel = manualModelOverride ?? state.model;
-      const activePrefix = activeModel ? `目前:${this.formatResolvedModelEntry(activeModel)} / ` : "";
+      const activePrefix = activeModel ? `目前:${this.formatResolvedModelEntry(activeModel, state.provider)} / ` : "";
       return `Auto (${activePrefix}R:${this.formatResolvedModelEntry(state.routerModel)} / C:${this.formatResolvedModelEntry(state.coreModel)})`;
     }
     return this.formatModelEntry(state.provider, manualModelOverride ?? state.model ?? "未設定");
@@ -2855,7 +2859,7 @@ export class TeleTopazService {
 
   private formatActiveSource(state: AgentContext): string {
     if (state.mode === "auto") {
-      return state.model ? `Auto:${this.formatResolvedModelEntry(state.model)}` : "Auto:待路由";
+      return state.model ? `Auto:${this.formatResolvedModelEntry(state.model, state.provider)}` : "Auto:待路由";
     }
     return this.formatModelEntry(state.provider, state.model ?? "未設定");
   }
