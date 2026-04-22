@@ -205,6 +205,54 @@ describe("CodexSdkSession abort cleanup", () => {
     await sendPromise;
   });
 
+  it("finishes shortly after turn.completed even if the codex process does not close", async () => {
+    vi.useFakeTimers();
+    const mock = createMockChild();
+    vi.mocked(spawn).mockReturnValueOnce(mock.child as unknown as ReturnType<typeof spawn>);
+
+    const session = new CodexSdkSession({
+      model: "gpt-5.4-mini",
+      workingDirectory: "/tmp",
+      approvalMode: "auto_edit"
+    });
+
+    const events: AiEvent[] = [];
+    session.onEvent((event) => events.push(event));
+
+    let settled = false;
+    const sendPromise = session.send("只回覆 ok").then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    mock.emitStdout(JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "ok" }
+    }) + "\n");
+    mock.emitStdout(JSON.stringify({
+      type: "turn.completed",
+      usage: { input_tokens: 1, output_tokens: 1 }
+    }) + "\n");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    try {
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(settled).toBe(true);
+      expect(events).toContainEqual({
+        type: "assistant.message",
+        data: { content: "ok" }
+      });
+      expect(events).toContainEqual({ type: "session.idle" });
+    } finally {
+      await session.abort();
+      await Promise.resolve();
+      await Promise.resolve();
+      await sendPromise;
+    }
+  });
+
   it("parses commentary and function-call events from current Codex JSON output", () => {
     const session = new CodexSdkSession({
       model: "gpt-5.4-mini",

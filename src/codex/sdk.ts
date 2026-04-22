@@ -4,6 +4,7 @@ import { isSandboxActive } from "../sandbox-profile.js";
 
 const retryBackoffsMs = [1000, 2000, 5000];
 const CLI_TIMEOUT_MS = 300_000; // Codex 可能需要較長時間（多輪工具呼叫）
+const TURN_COMPLETED_GRACE_MS = 1000;
 
 // 本地 CLI 整體 timeout 訊息；屬於「agent 卡死」而非網路暫態，不重試。
 const LOCAL_CLI_TIMEOUT_MARKER = "Codex CLI exceeded";
@@ -219,10 +220,13 @@ export class CodexSdkSession implements AiSession {
       let errorText = "";
       let stdoutBuffer = "";
       let resolved = false;
+      let closeReceived = false;
+      let turnCompletedTimer: NodeJS.Timeout | undefined;
 
       const cleanup = () => {
         signal.removeEventListener("abort", abortHandler);
         clearTimeout(timeoutTimer);
+        if (turnCompletedTimer) clearTimeout(turnCompletedTimer);
       };
 
       const finish = (err: Error | null, result?: string) => {
@@ -250,10 +254,23 @@ export class CodexSdkSession implements AiSession {
         finish(new Error("timeout: " + LOCAL_CLI_TIMEOUT_MARKER + " " + CLI_TIMEOUT_MS + "ms"));
       }, CLI_TIMEOUT_MS);
 
+      const scheduleTurnCompletedFinish = () => {
+        if (resolved || closeReceived || turnCompletedTimer) return;
+
+        turnCompletedTimer = setTimeout(() => {
+          if (resolved || closeReceived) return;
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          if (!child.killed) child.kill("SIGKILL");
+          finish(null, this.responseText);
+        }, TURN_COMPLETED_GRACE_MS);
+      };
+
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
 
       child.stdout.on("data", (chunk: string) => {
+        if (resolved) return;
         stdoutBuffer += chunk;
         const lines = stdoutBuffer.split("\n");
         stdoutBuffer = lines.pop() || "";
@@ -268,10 +285,14 @@ export class CodexSdkSession implements AiSession {
           }
 
           this.handleStreamEvent(event);
+          if (event.type === "turn.completed") {
+            scheduleTurnCompletedFinish();
+          }
         }
       });
 
       child.stderr.on("data", (chunk: string) => {
+        if (resolved) return;
         errorText += chunk;
       });
 
@@ -280,12 +301,16 @@ export class CodexSdkSession implements AiSession {
       });
 
       child.on("close", (code) => {
+        closeReceived = true;
         if (signal.aborted) return;
         // 處理殘留的 buffer
         if (stdoutBuffer.trim()) {
           try {
             const event = JSON.parse(stdoutBuffer) as Record<string, unknown>;
             this.handleStreamEvent(event);
+            if (event.type === "turn.completed") {
+              scheduleTurnCompletedFinish();
+            }
           } catch { /* ignore */ }
         }
         if (code === 0 || this.responseText) {
