@@ -58,7 +58,7 @@ export type { WaAttachment, WaPendingTask, WaState } from "./types.js";
 
 function resolveApprovalMode(p: ProviderType): "plan" | "auto_edit" | undefined {
   if (p === "gemini") return "plan";
-  if (p === "claude-code") return "auto_edit";
+  if (p === "claude-code" || p === "codex") return "auto_edit";
   return undefined;
 }
 
@@ -720,7 +720,15 @@ export class WhatsAppService {
       }
 
       case "assistant.message_delta":
-        // Ignore delta to avoid duplicate replies
+        if (!state.silentMode) {
+          const phase = typeof data === "object" && data
+            ? extractString(data as Record<string, unknown>, ["phase"])
+            : undefined;
+          const content = extractText(data);
+          if (phase === "commentary" && content) {
+            await this.send(jid, markdownToWhatsApp(redact(content)));
+          }
+        }
         return;
 
       case "tool.execution_start":

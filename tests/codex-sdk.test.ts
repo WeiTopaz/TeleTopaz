@@ -85,12 +85,24 @@ describe("codex isRetryableError", () => {
 });
 
 describe("CodexSdkSession abort cleanup", () => {
+  const originalSandboxEnv = process.env["TELETOPAZ_SANDBOX_ACTIVE"];
+
   beforeEach(() => {
     vi.mocked(spawn).mockClear();
+    if (originalSandboxEnv === undefined) {
+      delete process.env["TELETOPAZ_SANDBOX_ACTIVE"];
+    } else {
+      process.env["TELETOPAZ_SANDBOX_ACTIVE"] = originalSandboxEnv;
+    }
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    if (originalSandboxEnv === undefined) {
+      delete process.env["TELETOPAZ_SANDBOX_ACTIVE"];
+    } else {
+      process.env["TELETOPAZ_SANDBOX_ACTIVE"] = originalSandboxEnv;
+    }
   });
 
   it("destroys stdio pipes when aborted to stop residual event emission", async () => {
@@ -132,5 +144,124 @@ describe("CodexSdkSession abort cleanup", () => {
       (e) => e.type === "assistant.message" && ((e.data as { content?: string })?.content === "late message")
     );
     expect(lateAssistant).toBeUndefined();
+  });
+
+  it("spawns codex with user config and rules disabled so global plugins cannot hijack bot turns", async () => {
+    const mock = createMockChild();
+    vi.mocked(spawn).mockReturnValueOnce(mock.child as unknown as ReturnType<typeof spawn>);
+
+    const session = new CodexSdkSession({
+      model: "gpt-5.4-mini",
+      workingDirectory: "/tmp",
+      approvalMode: "auto_edit",
+      systemPrompt: "system prompt"
+    });
+
+    const sendPromise = session.send("只回覆 ok");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const spawnCall = vi.mocked(spawn).mock.calls[0];
+    expect(spawnCall).toBeDefined();
+    const args = spawnCall?.[1] as string[] | undefined;
+    expect(args).toContain("--ignore-user-config");
+    expect(args).toContain("--ignore-rules");
+
+    mock.emitStdout(JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "ok" }
+    }) + "\n");
+    mock.emitClose(0);
+    await sendPromise;
+  });
+
+  it("uses Codex bypass mode when TeleTopaz sandbox is already active", async () => {
+    process.env["TELETOPAZ_SANDBOX_ACTIVE"] = "1";
+
+    const mock = createMockChild();
+    vi.mocked(spawn).mockReturnValueOnce(mock.child as unknown as ReturnType<typeof spawn>);
+
+    const session = new CodexSdkSession({
+      model: "gpt-5.4-mini",
+      workingDirectory: "/tmp",
+      approvalMode: "auto_edit"
+    });
+
+    const sendPromise = session.send("只回覆 ok");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const spawnCall = vi.mocked(spawn).mock.calls[0];
+    expect(spawnCall).toBeDefined();
+    const args = spawnCall?.[1] as string[] | undefined;
+    expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(args).not.toContain("--full-auto");
+
+    mock.emitStdout(JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "ok" }
+    }) + "\n");
+    mock.emitClose(0);
+    await sendPromise;
+  });
+
+  it("parses commentary and function-call events from current Codex JSON output", () => {
+    const session = new CodexSdkSession({
+      model: "gpt-5.4-mini",
+      workingDirectory: "/tmp",
+      approvalMode: "auto_edit"
+    });
+
+    const events: AiEvent[] = [];
+    session.onEvent((event) => events.push(event));
+
+    (session as unknown as { handleStreamEvent: (event: Record<string, unknown>) => void }).handleStreamEvent({
+      type: "event_msg",
+      payload: {
+        type: "agent_message",
+        message: "我先看檔案",
+        phase: "commentary"
+      }
+    });
+
+    (session as unknown as { handleStreamEvent: (event: Record<string, unknown>) => void }).handleStreamEvent({
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "exec_command",
+        call_id: "call-1",
+        arguments: "{\"cmd\":\"pwd\"}"
+      }
+    });
+
+    (session as unknown as { handleStreamEvent: (event: Record<string, unknown>) => void }).handleStreamEvent({
+      type: "response_item",
+      payload: {
+        type: "function_call_output",
+        call_id: "call-1",
+        output: "sandbox-exec: sandbox_apply: Operation not permitted"
+      }
+    });
+
+    expect(events).toContainEqual({
+      type: "assistant.message_delta",
+      data: { content: "我先看檔案", phase: "commentary" }
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "tool.execution_start",
+      data: expect.objectContaining({
+        toolName: "exec_command",
+        toolCallId: "call-1",
+        toolArgs: { cmd: "pwd" }
+      })
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "tool.execution_complete",
+      data: expect.objectContaining({
+        toolCallId: "call-1",
+        status: "success",
+        output: "sandbox-exec: sandbox_apply: Operation not permitted"
+      })
+    }));
   });
 });

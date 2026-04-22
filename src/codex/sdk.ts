@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { AiAttachment, AiClient, AiSession, AiEvent, AiSessionOptions, AiProviderInfo } from "../provider/types.js";
+import { isSandboxActive } from "../sandbox-profile.js";
 
 const retryBackoffsMs = [1000, 2000, 5000];
 const CLI_TIMEOUT_MS = 300_000; // Codex 可能需要較長時間（多輪工具呼叫）
@@ -171,23 +172,27 @@ export class CodexSdkSession implements AiSession {
 
   /**
    * 將 AiSessionOptions.approvalMode 對應到 Codex CLI 的旗標。
-   * default/auto_edit 均映射到 --full-auto（workspace-write sandbox + 自動核准）；
-   * spawn 無 TTY，未指定自動核准旗標時工具呼叫會卡住 approval prompt。
+   * TeleTopaz 已由外層 macOS sandbox-exec 隔離時，改用 Codex 官方 bypass 旗標，
+   * 避免再觸發內層 workspace-write sandbox 的 sandbox_apply 失敗。
+   * 非 TeleTopaz sandbox 環境仍維持 sandboxed full-auto。
    */
   private resolveApprovalArgs(): string[] {
     switch (this.options.approvalMode) {
-      case "yolo":
-        return ["--yolo"];
       case "plan":
         return ["--sandbox", "read-only", "--full-auto"];
+      case "yolo":
       case "auto_edit":
       default:
+        if (isSandboxActive()) {
+          return ["--dangerously-bypass-approvals-and-sandbox"];
+        }
         return ["--full-auto"];
     }
   }
 
   private spawnCodexCli(prompt: string, signal: AbortSignal): Promise<string> {
     this.responseText = "";
+    this.lastCommentaryText = "";
 
     return new Promise((resolve, reject) => {
       const fullPrompt = this.buildFullPrompt();
@@ -197,6 +202,8 @@ export class CodexSdkSession implements AiSession {
       const args = [
         "exec",                         // 非互動模式
         "--json",                       // JSONL 輸出
+        "--ignore-user-config",         // 隔離 ~/.codex/config.toml，避免載入 computer-use 等全域插件
+        "--ignore-rules",               // 避免額外全域/專案 rules 改寫 bot 專用工作流
         "--skip-git-repo-check",        // 允許非 git repo 工作目錄（日記、筆記等）
         "-m", this.options.model,       // 模型
         "-C", cwd,                      // agent 工作根目錄
@@ -298,45 +305,171 @@ export class CodexSdkSession implements AiSession {
     const eventType = event.type as string | undefined;
     const item = event.item as Record<string, unknown> | undefined;
 
-    if (!item) return;
+    if (item) {
+      const itemType = item.type as string | undefined;
 
-    const itemType = item.type as string | undefined;
+      // 工具呼叫開始
+      if (eventType === "item.started" && itemType === "command_execution") {
+        this.emit({
+          type: "tool.execution_start",
+          data: {
+            toolName: "shell",
+            toolCallId: item.id as string | undefined,
+            args: { command: item.command }
+          }
+        });
+      }
 
-    // 工具呼叫開始
-    if (eventType === "item.started" && itemType === "command_execution") {
+      // 工具呼叫完成
+      if (eventType === "item.completed" && itemType === "command_execution") {
+        this.emit({
+          type: "tool.execution_complete",
+          data: {
+            toolCallId: item.id as string | undefined,
+            status: item.exit_code === 0 ? "success" : "error",
+            output: item.aggregated_output,
+            ...(item.exit_code === 0 ? {} : { error: item.aggregated_output })
+          }
+        });
+      }
+
+      // agent_message 完成 — 累積最終回應文字
+      if (eventType === "item.completed" && itemType === "agent_message") {
+        const text = item.text as string | undefined;
+        if (text) {
+          // 用最後一則 agent_message 作為最終回應
+          // （Codex 可能在工具呼叫前後各產一段訊息，取最後一段作為 final）
+          this.responseText = text;
+        }
+      }
+
+      return;
+    }
+
+    const payload = event.payload;
+    if (!payload || typeof payload !== "object") return;
+    const record = payload as Record<string, unknown>;
+
+    if (eventType === "event_msg") {
+      if ((record.type as string | undefined) !== "agent_message") return;
+      this.handleAgentMessage(record.message ?? record, this.extractString(record, ["phase"]));
+      return;
+    }
+
+    if (eventType !== "response_item") return;
+    const payloadType = record.type as string | undefined;
+
+    if (payloadType === "message" && record.role === "assistant") {
+      this.handleAgentMessage(record, this.extractString(record, ["phase"]));
+      return;
+    }
+
+    if (payloadType === "function_call" || payloadType === "custom_tool_call" || payloadType === "tool_search_call") {
+      const toolArgs = this.parseJsonValue(record.arguments ?? record.input);
       this.emit({
         type: "tool.execution_start",
         data: {
-          toolName: "shell",
-          toolCallId: item.id as string | undefined,
-          toolArgs: { command: item.command }
+          toolName: this.extractString(record, ["name"]),
+          toolCallId: this.extractString(record, ["call_id", "id"]),
+          args: toolArgs,
+          toolArgs
         }
       });
+      return;
     }
 
-    // 工具呼叫完成
-    if (eventType === "item.completed" && itemType === "command_execution") {
+    if (payloadType === "function_call_output" || payloadType === "custom_tool_call_output" || payloadType === "tool_search_output") {
+      const toolCallId = this.extractString(record, ["call_id", "id"]);
+      const normalized = this.normalizeToolOutput(record.output);
+      const error = record.error ?? record.err ?? normalized.error;
       this.emit({
         type: "tool.execution_complete",
         data: {
-          toolCallId: item.id as string | undefined,
-          status: item.exit_code === 0 ? "success" : "error",
-          output: item.aggregated_output
+          toolCallId,
+          status: error ? "error" : "success",
+          output: normalized.output,
+          ...(error ? { error } : {})
         }
       });
     }
+  }
 
-    // agent_message 完成 — 累積最終回應文字
-    if (eventType === "item.completed" && itemType === "agent_message") {
-      const text = item.text as string | undefined;
-      if (text) {
-        // 用最後一則 agent_message 作為最終回應
-        // （Codex 可能在工具呼叫前後各產一段訊息，取最後一段作為 final）
-        this.responseText = text;
+  private handleAgentMessage(payload: unknown, phase?: string): void {
+    const text = this.extractText(payload);
+    if (!text) return;
+
+    if (phase === "commentary") {
+      if (text === this.lastCommentaryText) return;
+      this.lastCommentaryText = text;
+      this.emit({
+        type: "assistant.message_delta",
+        data: { content: text, phase: "commentary" }
+      });
+      return;
+    }
+
+    this.responseText = text;
+  }
+
+  private extractText(payload: unknown): string | undefined {
+    if (!payload) return undefined;
+    if (typeof payload === "string") return payload;
+    if (typeof payload !== "object") return undefined;
+
+    const record = payload as Record<string, unknown>;
+    const content = record.content ?? record.message ?? record.text ?? record.delta;
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      const parts = content.flatMap((item) => {
+        if (typeof item === "string") return [item];
+        if (item && typeof item === "object") {
+          const text = (item as Record<string, unknown>).text;
+          if (typeof text === "string") return [text];
+        }
+        return [];
+      });
+      if (parts.length) return parts.join("");
+    }
+    return undefined;
+  }
+
+  private extractString(record: Record<string, unknown>, keys: string[]): string | undefined {
+    for (const key of keys) {
+      const value = record[key];
+      if (typeof value === "string" && value) return value;
+    }
+    return undefined;
+  }
+
+  private parseJsonValue(value: unknown): unknown {
+    if (typeof value !== "string") return value;
+    try {
+      return JSON.parse(value) as unknown;
+    } catch {
+      return value;
+    }
+  }
+
+  private normalizeToolOutput(value: unknown): { output: unknown; error?: unknown } {
+    const parsed = this.parseJsonValue(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { output: parsed };
+    }
+
+    const record = parsed as Record<string, unknown>;
+    const output = record.output ?? parsed;
+    const metadata = record.metadata;
+    if (metadata && typeof metadata === "object") {
+      const exitCode = (metadata as Record<string, unknown>).exit_code;
+      if (typeof exitCode === "number" && exitCode !== 0) {
+        return { output, error: output };
       }
     }
+
+    return { output };
   }
 
   /** 供 spawnCodexCli 閉包存取最終回應 */
   private responseText = "";
+  private lastCommentaryText = "";
 }

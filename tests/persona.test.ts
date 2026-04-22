@@ -41,6 +41,7 @@ describe("buildPersonaPrompt", () => {
       // 無 GUI 終端約束應出現，禁止呼叫 open -a / osascript 等 GUI 工具
       expect(prompt).toMatch(/無\s*GUI/);
       expect(prompt).toMatch(/open\s*-a/);
+      expect(prompt).toMatch(/Computer Use/i);
     }
   });
 });

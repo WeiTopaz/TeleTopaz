@@ -119,7 +119,7 @@ type SendPromptResult = {
 
 function resolveApprovalMode(provider: ProviderType, allowAll?: boolean): "plan" | "auto_edit" | "yolo" | undefined {
   if (provider === "gemini") return "plan";
-  if (provider === "claude-code") return allowAll ? "yolo" : "auto_edit";
+  if (provider === "claude-code" || provider === "codex") return allowAll ? "yolo" : "auto_edit";
   return undefined;
 }
 
@@ -2200,7 +2200,22 @@ export class TeleTopazService {
         return;
       }
       case "assistant.message_delta": {
-        // Ignore delta to avoid duplicate replies; use final assistant.message only.
+        const content = this.extractText(data);
+        const phase = typeof data === "object" && data
+          ? this.extractString(data as Record<string, unknown>, ["phase"])
+          : undefined;
+        if (phase !== "commentary" || !content) {
+          return;
+        }
+
+        const progressText = content.length > 3500 ? `${content.slice(0, 3497)}...` : content;
+        const editTarget = state.processingMessageId
+          ?? (state.silentMode ? state.silentAnchorMessageId : undefined);
+        if (editTarget) {
+          await this.editMessageSafe(chatId, editTarget, progressText);
+        } else if (!state.silentMode) {
+          await this.safeSend(chatId, progressText, state.replyToMessageId);
+        }
         return;
       }
       case "tool.execution_start": {

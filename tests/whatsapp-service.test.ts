@@ -388,6 +388,18 @@ describe("AI event handling", () => {
     expect(svc.wa.sendMessage).toHaveBeenCalledWith("jid", "text fallback");
   });
 
+  it("assistant.message_delta sends commentary progress in normal mode", async () => {
+    const { svc } = await buildService("886912345678");
+    svc.sessions.set("jid", makeWaState({ processing: true, lastPrompt: "q", silentMode: false }));
+
+    await svc.handleAiEvent("jid", {
+      type: "assistant.message_delta",
+      data: { content: "我先確認今天的格式", phase: "commentary" }
+    });
+
+    expect(svc.wa.sendMessage).toHaveBeenCalledWith("jid", "我先確認今天的格式");
+  });
+
   it("session.idle clears processing and persists memory", async () => {
     const { svc } = await buildService("886912345678");
     svc.sessions.set("jid", makeWaState({ processing: true, lastPrompt: "question", lastReply: "answer" }));

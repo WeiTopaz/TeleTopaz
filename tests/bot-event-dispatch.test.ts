@@ -32,6 +32,7 @@ function createService() {
   const service = new TeleTopazService(api, "1", "1", 0);
 
   (service as any).safeSend = vi.fn().mockResolvedValue({ message_id: 10 });
+  (service as any).editMessageSafe = vi.fn().mockResolvedValue(undefined);
   (service as any).sessionMemory = {
     buildContext: vi.fn().mockResolvedValue(undefined),
     append: vi.fn().mockResolvedValue(undefined),
@@ -87,6 +88,21 @@ describe("event dispatch", () => {
 
     // Should attempt to send or track the tool start
     expect((service as any).safeSend).toHaveBeenCalled();
+  });
+
+  it("surfaces commentary deltas on the in-flight processing message", async () => {
+    const { service } = createService();
+    const state = (service as any).getOrCreateState(1);
+    state.session = createSession();
+    state.processingMessageId = 42;
+    state.silentMode = false;
+
+    await (service as any).handleEvent(1, {
+      type: "assistant.message_delta",
+      data: { content: "我先確認日誌格式", phase: "commentary" },
+    });
+
+    expect((service as any).editMessageSafe).toHaveBeenCalledWith(1, 42, "我先確認日誌格式");
   });
 
   it("handles session.idle and persists memory when prompt was sent", async () => {
