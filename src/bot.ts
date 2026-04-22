@@ -88,24 +88,69 @@ const ROUTER_MODEL_PATTERN = /(?:^|[-.])(mini|flash|lite|haiku)(?:$|[-.])/i;
 interface ShortcutConfig {
   label: string;
   callbackKey: string;
+  command: `/${string}`;
   targetDirName: string;
   modelEntry: string;
 }
 
 const SHORTCUT_BUTTONS: ShortcutConfig[] = [
   {
+    label: "TeleTopaz",
+    callbackKey: "teletopaz",
+    command: "/teletopaz",
+    targetDirName: "TeleTopaz",
+    modelEntry: "cdcli:gpt-5.4",
+  },
+  {
     label: "📔 日記",
     callbackKey: "diary",
+    command: "/diary",
     targetDirName: "MyDiary",
     modelEntry: "cdcli:gpt-5.4-mini",
   },
   {
     label: "📓 筆記",
     callbackKey: "notebook",
+    command: "/notebook",
     targetDirName: "MyNotebook",
     modelEntry: "cccli:claude-sonnet-4.6",
   },
 ];
+
+type CommandHelpEntry = {
+  command: string;
+  description: string;
+};
+
+const COMMAND_HELP_ENTRIES: CommandHelpEntry[] = [
+  { command: "/project", description: "選擇專案" },
+  { command: "/newproject", description: "建立新專案（例：/newproject MyApp）" },
+  { command: "/model", description: "切換 AI 模型 (Auto/Manual)" },
+  ...SHORTCUT_BUTTONS.map((shortcut) => ({
+    command: shortcut.command,
+    description: `切換到 ${shortcut.targetDirName} 專案並使用 ${shortcut.modelEntry}`,
+  })),
+  { command: "/info", description: "說明" },
+  { command: "/clear", description: "清除對話與附件" },
+  { command: "/router {prompt}", description: "使用 routerModel 執行單次對話，完成後自動還原" },
+  { command: "/allowall", description: "切換全部允許/操作確認模式" },
+  { command: "/silent", description: "切換安靜/正常通知模式" },
+  { command: "/restart", description: "熱啟動" },
+  { command: "/quit", description: "關閉Bot" },
+  { command: "/help", description: "顯示說明與指令列表" },
+];
+
+function findShortcutByCommand(command: string): ShortcutConfig | undefined {
+  return SHORTCUT_BUTTONS.find((shortcut) => shortcut.command === command);
+}
+
+function buildCommandHelpSection(): string[] {
+  const lines = ["📌 指令："];
+  for (const entry of COMMAND_HELP_ENTRIES) {
+    lines.push("", `${entry.command} — ${entry.description}`);
+  }
+  return lines;
+}
 
 type CreateSessionOptions = {
   announce?: boolean;
@@ -283,7 +328,9 @@ function stripAttachmentContext(prompt: string): string {
 const COMMANDS = [
   "/help",
   "/project",
+  "/newproject",
   "/model",
+  ...SHORTCUT_BUTTONS.map((shortcut) => shortcut.command),
   "/info",
   "/i",
   "/clear",
@@ -370,17 +417,10 @@ export class TeleTopazService {
       logger.info(`🤖 使用預設模型: ${defaultModel}`);
     }
     logger.info("✅ 可用命令：");
-    logger.info("  /project - 選擇專案");
-    logger.info("  /newproject - 建立新專案");
-    logger.info("  /model - 切換模型 (Auto/Manual)");
-    logger.info("  /info - 說明");
-    logger.info("  /clear - 清除對話與附件");
-    logger.info("  /router {prompt} - 使用 routerModel 執行單次對話，完成後自動還原");
-    logger.info("  /allowall - 切換全部允許/操作確認模式");
-    logger.info("  /silent - 切換安靜/正常通知模式");
-    logger.info("  /restart - 熱啟動 (需搭配 start:hot)");
-    logger.info("  /quit - 關閉Bot");
-    logger.info("  /help - 顯示說明與指令列表");
+    for (const entry of COMMAND_HELP_ENTRIES) {
+      const description = entry.command === "/restart" ? `${entry.description} (需搭配 start:hot)` : entry.description;
+      logger.info(`  ${entry.command} - ${description}`);
+    }
 
     // Auto-create session if workDir and model ready
     const startupModel = state.mode === "auto" ? state.model : state.model ?? defaultModel;
@@ -1121,10 +1161,17 @@ export class TeleTopazService {
     const chatId = message.chat.id;
     const userId = message.from?.id;
     const text = message.text ?? "";
-    const [command, ...args] = text.trim().split(/\s+/);
+    const [rawCommand, ...args] = text.trim().split(/\s+/);
+    const command = rawCommand ?? "";
 
     if (!this.isOwner(chatId, userId)) {
       await this.safeSend(chatId, "抱歉，只有擁有者可以使用此機器人。", message.message_id);
+      return;
+    }
+
+    const shortcut = findShortcutByCommand(command);
+    if (shortcut) {
+      await this.handleShortcut(chatId, shortcut.callbackKey);
       return;
     }
 
@@ -1727,18 +1774,7 @@ export class TeleTopazService {
 
     lines.push(
       "",
-      "📌 指令：","",
-      "/project — 選擇專案","",
-      "/newproject — 建立新專案（例：/newproject MyApp）","",
-      "/model — 切換 AI 模型 (Auto/Manual)","",
-      "/info — 說明","",
-      "/clear — 清除對話與附件","",
-      "/router {prompt} — 使用 routerModel 執行單次對話，完成後自動還原","",
-      "/allowall — 切換全部允許/操作確認模式","",
-      "/silent — 切換安靜/正常通知模式","",
-      "/restart — 熱啟動","",
-      "/quit — 關閉Bot","",
-      "/help — 顯示說明與指令列表"
+      ...buildCommandHelpSection()
     );
 
     const keyboard = this.buildNavKeyboard();
@@ -2912,18 +2948,7 @@ export class TeleTopazService {
       `🔐 操作確認：${state.allowAll ? "全部允許" : "逐次確認"}`,
       `🔇 安靜模式：${state.silentMode ? "開啟" : "關閉"}`,
       "",
-      "📌 指令：",
-      "/project — 選擇專案","",
-      "/newproject — 建立新專案（例：/newproject MyApp）","",
-      "/model — 切換 AI 模型 (Auto/Manual)","",
-      "/info — 說明","",
-      "/clear — 清除對話與附件","",
-      "/router {prompt} — 使用 routerModel 執行單次對話，完成後自動還原","",
-      "/allowall — 切換全部允許/操作確認模式","",
-      "/silent — 切換安靜/正常通知模式","",
-      "/restart — 熱啟動","",
-      "/quit — 關閉Bot","",
-      "/help — 顯示說明與指令列表"
+      ...buildCommandHelpSection()
     ].join("\n");
   }
 

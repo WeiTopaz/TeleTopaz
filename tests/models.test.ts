@@ -21,7 +21,7 @@ describe("model config", () => {
       "ctcli:claude-opus-4.6",
       "ctcli:claude-sonnet-4.6",
       "gmcli:gemini-3.1-pro-preview",
-      "cccli:claude-opus-4.6",
+      "cccli:claude-opus-4.7",
       "cccli:claude-sonnet-4.6",
       "cccli:claude-haiku-4.5",
       "cdcli:gpt-5.4",
@@ -40,7 +40,7 @@ describe("model config", () => {
       "gemini-3.1-pro-preview"
     ]);
     await expect(modelConfig.loadSupportedModels("claude-code")).resolves.toEqual([
-      "claude-opus-4.6",
+      "claude-opus-4.7",
       "claude-sonnet-4.6",
       "claude-haiku-4.5"
     ]);

@@ -543,6 +543,9 @@ const MIME_EXTENSIONS: Record<string, string> = {
 | `/project` | `do.project` | `sendDirectoryList()` | 選擇專案 |
 | `/newproject` | — | `handleNewProject()` | 在工作區建立新專案目錄 |
 | `/model` | `do.model` | `handleModelCommand()` | 設定 AI 模型與路由模式 |
+| `/teletopaz` | — | `handleShortcut("teletopaz")` | 切換到 `TeleTopaz` 並使用 `cdcli:gpt-5.4` |
+| `/diary` | — | `handleShortcut("diary")` | 切換到 `MyDiary` 並使用 `cdcli:gpt-5.4-mini` |
+| `/notebook` | — | `handleShortcut("notebook")` | 切換到 `MyNotebook` 並使用 `cccli:claude-sonnet-4.6` |
 | `/info`, `/i` | `do.info` | `sendStatus()` | 檢視狀態、模型、用量 |
 | `/clear` | — | `handleClear()` | 清除對話歷史與附件 |
 | `/allowall` | — | `handleAllowAllToggle()` | 切換工具執行自動批准模式 |
@@ -555,19 +558,20 @@ const MIME_EXTENSIONS: Record<string, string> = {
 
 #### 快捷按鈕 (`SHORTCUT_BUTTONS`)
 
-Telegram 歡迎訊息的 inline keyboard 下方附帶一列快捷按鈕，按下後自動切換工作區與模型並等待使用者輸入：
+Telegram 歡迎訊息的 inline keyboard 下方附帶一列快捷按鈕；同一份 `SHORTCUT_BUTTONS` 設定也提供 `/teletopaz`、`/diary`、`/notebook` 三個 slash commands。按下按鈕或輸入指令後，都會自動切換工作區與模型：
 
 | Label | `callbackKey` | 目標工作區 | 切換模型 |
 |-------|---------------|------------|----------|
-| 📔 日記 | `diary` | `MyDiary` | `ctcli:gpt-5-mini` |
-| 📓 筆記 | `notebook` | `MyNotebook` | `ctcli:gpt-5-mini` |
+| TeleTopaz | `teletopaz` | `TeleTopaz` | `cdcli:gpt-5.4` |
+| 📔 日記 | `diary` | `MyDiary` | `cdcli:gpt-5.4-mini` |
+| 📓 筆記 | `notebook` | `MyNotebook` | `cccli:claude-sonnet-4.6` |
 
 回調格式：`do.shortcut:{callbackKey}`
 
 處理流程：
 1. 從 `SHORTCUT_BUTTONS` 找到對應 config
 2. 搜尋 `loadAllowedDirectories()` 中是否有 `basename === config.targetDirName`
-3. 若找到：清除 session → 切換 `workDir` 與 `model` → 等待下一則訊息
+3. 若找到：切換 `provider` / `mode` / `workDir` / `model`，立即重建 session
 4. 若未找到：回傳「找不到目錄 {targetDirName}，請確認 TELETOPAZ_DIRECTORY_PATTERNS 設定」
 
 #### 4.3.1 `/newproject` 指令規格
@@ -687,7 +691,7 @@ type ToolTracking = {
 | `do.model` / `do.model:{sub}` | 模型選擇 UI（子路由含 `auto`, `config_router`, `config_core`） |
 | `do.info` | 顯示狀態 |
 | `do.help` | 顯示說明 |
-| `do.shortcut:{key}` | 套用快捷按鈕（如 `MyDiary` / `MyNotebook`） |
+| `do.shortcut:{key}` | 套用快捷切換（如 `TeleTopaz` / `MyDiary` / `MyNotebook`） |
 | `pick.proj:{idx}` | 設定工作目錄 |
 | `pick.mod:{idx}` | 設定模型（手動模式） |
 | `do.model:pick.manual:{idx}` | 設定模型（手動模式，統一 UI，`do.model:` 子路由） |
@@ -1277,10 +1281,10 @@ gemini -m {model} --output-format stream-json --approval-mode {approvalMode} < {
 
 #### 模型名稱轉換 (`resolveModelFlag`)
 
-Claude Code CLI 接受別名（`opus`, `sonnet`）或完整名稱（`claude-opus-4-6`），但 `SUPPORTED_MODELS` 中的格式使用 `.` 分隔（如 `claude-opus-4.6`）。`resolveModelFlag()` 將 `.` 全部替換為 `-`：
+Claude Code CLI 接受別名（`opus`, `sonnet`）或完整名稱（`claude-opus-4-7`），但 `SUPPORTED_MODELS` 中的格式使用 `.` 分隔（如 `claude-opus-4.7`）。`resolveModelFlag()` 將 `.` 全部替換為 `-`：
 
 ```typescript
-resolveModelFlag("claude-opus-4.6") → "claude-opus-4-6"
+resolveModelFlag("claude-opus-4.7") → "claude-opus-4-7"
 ```
 
 #### 暫存設定檔 (`writeClaudeSettingsFile`)
@@ -1306,7 +1310,7 @@ resolveModelFlag("claude-opus-4.6") → "claude-opus-4-6"
 #### `queryProviderInfo()`
 
 ```typescript
-{ models: ["claude-opus-4.6", "claude-sonnet-4.6", "claude-haiku-4.5"], version: "Claude-Code-CLI" }
+{ models: ["claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5"], version: "Claude-Code-CLI" }
 ```
 
 #### 附件處理
@@ -2175,7 +2179,7 @@ type SupportedModel = {
 | `ctcli:claude-opus-4.6` | Copilot (Anthropic) | Core |
 | `ctcli:claude-sonnet-4.6` | Copilot (Anthropic) | Core |
 | `gmcli:gemini-3.1-pro-preview` | Gemini (Google) | Core |
-| `cccli:claude-opus-4.6` | Claude Code (Anthropic) | Core |
+| `cccli:claude-opus-4.7` | Claude Code (Anthropic) | Core |
 | `cccli:claude-sonnet-4.6` | Claude Code (Anthropic) | Core |
 | `cccli:claude-haiku-4.5` | Claude Code (Anthropic) | Router / 輕量 |
 
@@ -2201,7 +2205,7 @@ type SupportedModel = {
 | `getDefaultModel(models)` | 取得預設模型 |
 | `getDefaultModelEnvName()` | 回傳預設模型環境變數名稱 |
 
-> `DEFAULT_ROUTER_MODEL = ctcli:gpt-5-mini`、`DEFAULT_CORE_MODEL = ctcli:gpt-5.4`、`DEFAULT_MODEL_ENTRY = DEFAULT_CORE_MODEL`。
+> `DEFAULT_ROUTER_MODEL = cdcli:gpt-5.4-mini`、`DEFAULT_CORE_MODEL = cdcli:gpt-5.4`、`DEFAULT_MODEL_ENTRY = DEFAULT_CORE_MODEL`。
 
 ### 12.3 目錄存取控制 (`src/config/directories.ts`)
 
@@ -2412,9 +2416,9 @@ function stripAttachmentContext(prompt: string): string
 | `CLI_TIMEOUT_MS` (Claude) | 300,000 (5 分鐘) | Claude Code CLI 呼叫逾時 |
 | `CLASSIFIER_TIMEOUT_MS` (WhatsApp) | 30,000 (30 秒) | WhatsApp 意圖分類逾時 |
 | `POLLING_ERROR_DEDUPE_WINDOW_MS` | 15,000 (15 秒) | 錯誤去重複時間窗口 |
-| `DEFAULT_ROUTER_MODEL` | `ctcli:gpt-5-mini` | Auto Mode 預設 Router |
-| `DEFAULT_CORE_MODEL` | `ctcli:gpt-5.4` | Auto Mode 預設 Core |
-| `DEFAULT_MODEL_ENTRY` | `ctcli:gpt-5.4` | 預設模型條目 |
+| `DEFAULT_ROUTER_MODEL` | `cdcli:gpt-5.4-mini` | Auto Mode 預設 Router |
+| `DEFAULT_CORE_MODEL` | `cdcli:gpt-5.4` | Auto Mode 預設 Core |
+| `DEFAULT_MODEL_ENTRY` | `cdcli:gpt-5.4` | 預設模型條目 |
 | `DEFAULT_MAX_ENTRIES` (記憶) | 24 | 持久化記憶最大筆數 |
 | `DEFAULT_MAX_CHARS` (記憶) | 400 | 每筆記憶最大字元數 |
 | `modelsTtlMs` | 300,000 (5 分鐘) | 模型快取 TTL |
@@ -2532,6 +2536,7 @@ type RestartState = {
 
 | 版本 | 日期 | 變更說明 |
 |------|------|----------|
+| 0.3.3 | 2026-04-22 | Telegram 新增 `TeleTopaz` 快捷按鈕與 `/teletopaz`、`/diary`、`/notebook` 三個快捷指令，並讓快捷按鈕/指令共用同一份 `SHORTCUT_BUTTONS` 設定；Claude Code 模型清單升級 `cccli:claude-opus-4.7`；README 與規格文件同步更新 |
 | 0.3.2 | 2026-04-18 | 規格精準校對：新增 §4.3 快捷按鈕（📔日記/📓筆記）文件；PTY 終端模擬環境變數表（TERM=xterm-ghostty 等）；Gemini PTY `queryProviderInfo` 版本修正為 `CLI-PTY-Wrapper`；Claude `resolveModelFlag` 與 `writeClaudeSettingsFile` 機制文件；sandbox 白名單新增 Claude 暫存路徑（`/private/tmp/claude-{uid}`、`claude-settings-*`、`claude-*-cwd`）；新增護欄 SAFE\_TARGET\_CONTEXTS 安全上下文豁免機制文件（8 個目標詞 × 安全上下文清單）；WhatsApp 預設狀態差異比較表（mode=manual, silentMode=false, routerModel/coreModel=undefined）；WhatsApp `/newproject` 自動切換行為註記；`isTelegramNotModifiedError` 函式文件；常數表新增 `CLI_TIMEOUT_MS` (Claude)=300,000 與 `CLASSIFIER_TIMEOUT_MS` (WA)=30,000 |
 | 0.3.1 | 2026-04-17 | 依目前程式碼重新校對規格：補上 WhatsApp / ChannelAdapter / Provider Factory / `TELETOPAZ_USE_PTY` 與 WA 相關環境變數；修正 Auto Mode 預設 Core 為 `ctcli:gpt-5.4`；補上 `cccli:claude-haiku-4.5`；修正章節編號（新增 §11 雙通道整合、後續章節順延）；補充 Claude 相關 sandbox 白名單與實際 `performGitRollback()` 行為；常數表新增 WhatsApp 上限與更新 `ROUTER_MODEL_PATTERN` 為含 `haiku` |
 | 0.3.0 | 2026-03-18 | 新增 Claude Code CLI 供應商（`cccli`，`claude-code` ProviderType）；新增 Gemini PTY 工作階段（`gemini/pty-session.ts`，node-pty 驅動）；新增 PTY 模組（`src/pty/`，含 runner/session-manager/ansi-parser/human-typist/sanitizer/request-queue/session-pacer）；`AgentContext` 新增 `sessionVersion`、`silentMode`、`silentAnchorMessageId`、`lastProactiveRebuildNotice` 欄位；新增 `/silent` 安靜模式指令（工具狀態折疊至錨點訊息）；新增 `/router` 指令（以 routerModel 執行單次對話並自動還原）；主動重建通知去重複機制（`lastProactiveRebuildNotice` 編輯計數）；TelegramApi 啟用 Happy Eyeballs；`errors.ts` 新增 "Session not found:" 錯誤處理；模型清單新增 `cccli:claude-opus-4.6`、`cccli:claude-sonnet-4.6`；`CliProviderLabel` 新增 `cccli`；新增 §8 PTY 模組章節；目錄新增至 34 個測試檔案 |

@@ -44,6 +44,9 @@ describe("TeleTopazService startup logging", () => {
       expect(joinedLogs).not.toContain("/Users/test/Project/Alpha");
       expect(joinedLogs).not.toContain("/Users/test/Project/Beta");
       expect(joinedLogs).not.toContain("6494154303");
+      expect(joinedLogs).toContain("/teletopaz");
+      expect(joinedLogs).toContain("/diary");
+      expect(joinedLogs).toContain("/notebook");
     } finally {
       infoSpy.mockRestore();
       processOnSpy.mockRestore();

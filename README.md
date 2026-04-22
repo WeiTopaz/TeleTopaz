@@ -181,10 +181,30 @@ npm start
 |---|---|
 | `/help` | 顯示說明與指令列表 |
 | `/project` | 選擇工作目錄（Workspace） |
+| `/newproject <名稱>` | 在目前工作區旁建立新專案目錄 |
 | `/model` | 設定 AI 模型與路由模式（Auto/Manual） |
+| `/teletopaz` | 切換到 `TeleTopaz` 專案並使用 `cdcli:gpt-5.4` |
+| `/diary` | 切換到 `MyDiary` 專案並使用 `cdcli:gpt-5.4-mini` |
+| `/notebook` | 切換到 `MyNotebook` 專案並使用 `cccli:claude-sonnet-4.6` |
 | `/info`（或 `/i`） | 檢視目前狀態、模型與資源使用量 |
 | `/clear` | 清除對話歷史與附件圖片，並重啟工作階段 |
+| `/router {prompt}` | 以 Router 模型執行單次對話，完成後自動還原 |
+| `/allowall` | 切換全部允許 / 操作確認模式 |
+| `/silent` | 切換安靜模式 |
+| `/restart` | 熱啟動服務 |
 | `/quit` | 安全關閉機器人 |
+
+---
+
+## Telegram 快捷按鈕
+
+| 按鈕 | 目標專案 | 模型 |
+|---|---|---|
+| `TeleTopaz` | `TeleTopaz` | `cdcli:gpt-5.4` |
+| `📔 日記` | `MyDiary` | `cdcli:gpt-5.4-mini` |
+| `📓 筆記` | `MyNotebook` | `cccli:claude-sonnet-4.6` |
+
+上述三顆按鈕與 `/teletopaz`、`/diary`、`/notebook` 共用同一份快捷設定，行為一致。
 
 ---
 
@@ -197,11 +217,11 @@ npm start
 | `ctcli:claude-opus-4.6` | GitHub Copilot | |
 | `ctcli:claude-sonnet-4.6` | GitHub Copilot | |
 | `gmcli:gemini-3.1-pro-preview` | Google Gemini | |
-| `cccli:claude-opus-4.6` | Claude Code CLI | |
+| `cccli:claude-opus-4.7` | Claude Code CLI | |
 | `cccli:claude-sonnet-4.6` | Claude Code CLI | |
 | `cccli:claude-haiku-4.5` | Claude Code CLI | 輕量 |
 
-> Auto Mode 預設以 `ctcli:gpt-5-mini` 作為 Router、`ctcli:gpt-5.4` 作為 Core。
+> Auto Mode 預設以 `cdcli:gpt-5.4-mini` 作為 Router、`cdcli:gpt-5.4` 作為 Core。
 
 ---
 

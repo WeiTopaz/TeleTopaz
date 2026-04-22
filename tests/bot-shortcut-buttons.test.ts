@@ -58,20 +58,37 @@ describe("shortcut buttons", () => {
     exitSpy.mockRestore();
   });
 
-  it("buildNavKeyboard returns 2 rows: first row 3 buttons, second row 2 buttons", () => {
+  it("buildNavKeyboard returns 2 rows: first row 3 buttons, second row 3 buttons", () => {
     const { service } = createService();
     const keyboard = (service as any).buildNavKeyboard();
     expect(keyboard.inline_keyboard).toHaveLength(2);
     expect(keyboard.inline_keyboard[0]).toHaveLength(3);
-    expect(keyboard.inline_keyboard[1]).toHaveLength(2);
+    expect(keyboard.inline_keyboard[1]).toHaveLength(3);
   });
 
   it("buildNavKeyboard second row has correct callback_data", () => {
     const { service } = createService();
     const keyboard = (service as any).buildNavKeyboard();
     const secondRow = keyboard.inline_keyboard[1];
-    expect(secondRow[0].callback_data).toBe("do.shortcut:diary");
-    expect(secondRow[1].callback_data).toBe("do.shortcut:notebook");
+    expect(secondRow[0].callback_data).toBe("do.shortcut:teletopaz");
+    expect(secondRow[1].callback_data).toBe("do.shortcut:diary");
+    expect(secondRow[2].callback_data).toBe("do.shortcut:notebook");
+  });
+
+  it("handleShortcut teletopaz with matching directory calls createSession and sendStatusFooter", async () => {
+    const { service } = createService();
+    (service as any).loadAllowedDirectories = vi.fn().mockResolvedValue([
+      "/home/user/TeleTopaz",
+      "/home/user/MyDiary",
+      "/home/user/MyNotebook",
+    ]);
+    (service as any).createSession = vi.fn().mockResolvedValue(undefined);
+    (service as any).sendStatusFooter = vi.fn().mockResolvedValue(undefined);
+
+    await (service as any).handleShortcut(1, "teletopaz");
+
+    expect((service as any).createSession).toHaveBeenCalledWith(1, "/home/user/TeleTopaz", "gpt-5.4");
+    expect((service as any).sendStatusFooter).toHaveBeenCalledWith(1);
   });
 
   it("handleShortcut with matching directory calls createSession and sendStatusFooter", async () => {
@@ -145,6 +162,7 @@ describe("shortcut buttons", () => {
           { text: "📋 說明", callback_data: "do.info" },
         ],
         [
+          { text: "TeleTopaz", callback_data: "do.shortcut:teletopaz" },
           { text: "📔 日記", callback_data: "do.shortcut:diary" },
           { text: "📓 筆記", callback_data: "do.shortcut:notebook" },
         ],

@@ -46,7 +46,7 @@ const REGISTERED_MODELS: SupportedModel[] = [
   { provider: "copilot", cli: "ctcli", model: "claude-opus-4.6", entry: "ctcli:claude-opus-4.6" },
   { provider: "copilot", cli: "ctcli", model: "claude-sonnet-4.6", entry: "ctcli:claude-sonnet-4.6" },
   { provider: "gemini", cli: "gmcli", model: "gemini-3.1-pro-preview", entry: "gmcli:gemini-3.1-pro-preview" },
-  { provider: "claude-code", cli: "cccli", model: "claude-opus-4.6", entry: "cccli:claude-opus-4.6" },
+  { provider: "claude-code", cli: "cccli", model: "claude-opus-4.7", entry: "cccli:claude-opus-4.7" },
   { provider: "claude-code", cli: "cccli", model: "claude-sonnet-4.6", entry: "cccli:claude-sonnet-4.6" },
   { provider: "claude-code", cli: "cccli", model: "claude-haiku-4.5", entry: "cccli:claude-haiku-4.5" },
   { provider: "codex", cli: "cdcli", model: "gpt-5.4", entry: "cdcli:gpt-5.4" },

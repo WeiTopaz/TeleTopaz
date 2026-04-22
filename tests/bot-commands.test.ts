@@ -102,6 +102,27 @@ describe("command handling", () => {
     expect((service as any).handleClear).toHaveBeenCalledWith(1);
   });
 
+  it("/teletopaz routes to handleShortcut", async () => {
+    const { service } = createService();
+    (service as any).handleShortcut = vi.fn().mockResolvedValue(undefined);
+    await (service as any).handleCommand(makeMsg("/teletopaz"));
+    expect((service as any).handleShortcut).toHaveBeenCalledWith(1, "teletopaz");
+  });
+
+  it("/diary routes to handleShortcut", async () => {
+    const { service } = createService();
+    (service as any).handleShortcut = vi.fn().mockResolvedValue(undefined);
+    await (service as any).handleCommand(makeMsg("/diary"));
+    expect((service as any).handleShortcut).toHaveBeenCalledWith(1, "diary");
+  });
+
+  it("/notebook routes to handleShortcut", async () => {
+    const { service } = createService();
+    (service as any).handleShortcut = vi.fn().mockResolvedValue(undefined);
+    await (service as any).handleCommand(makeMsg("/notebook"));
+    expect((service as any).handleShortcut).toHaveBeenCalledWith(1, "notebook");
+  });
+
   it("/quit triggers shutdown on valid message date", async () => {
     const { service } = createService();
     (service as any).shutdown = vi.fn().mockResolvedValue(undefined);

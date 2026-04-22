@@ -145,7 +145,7 @@ describe("TeleTopazService session memory", () => {
     state.provider = "claude-code";
 
     (service as unknown as { loadAllowedDirectories: () => Promise<string[]> }).loadAllowedDirectories = vi.fn().mockResolvedValue(["/tmp/project"]);
-    (service as unknown as { getModels: () => Promise<string[]> }).getModels = vi.fn().mockResolvedValue(["claude-opus-4.6"]);
+    (service as unknown as { getModels: () => Promise<string[]> }).getModels = vi.fn().mockResolvedValue(["claude-opus-4.7"]);
     (service as unknown as { createProviderClient: () => AiClient }).createProviderClient = vi.fn().mockReturnValue(client);
     (service as unknown as { safeSend: () => Promise<undefined> }).safeSend = vi.fn().mockResolvedValue(undefined);
     (service as unknown as { sessionMemory: { buildContext: (scope: unknown) => Promise<string | undefined> } }).sessionMemory = {
@@ -154,7 +154,7 @@ describe("TeleTopazService session memory", () => {
 
     await (service as unknown as {
       createSession: (chatId: number, cwd: string, model?: string) => Promise<void>;
-    }).createSession(1, "/tmp/project", "claude-opus-4.6");
+    }).createSession(1, "/tmp/project", "claude-opus-4.7");
 
     expect(client.createSession).toHaveBeenCalledOnce();
     const options = vi.mocked(client.createSession).mock.calls[0]?.[0] as { approvalMode?: string } | undefined;
@@ -210,7 +210,7 @@ describe("TeleTopazService session memory", () => {
     }).getOrCreateState(1);
 
     state.workDir = "/tmp/project";
-    state.routerModel = "cccli:claude-opus-4.6";
+    state.routerModel = "cccli:claude-opus-4.7";
     state.provider = "copilot";
     state.model = "gpt-5-mini";
 

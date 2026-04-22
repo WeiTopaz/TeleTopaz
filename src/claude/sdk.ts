@@ -14,9 +14,9 @@ type PreToolUseHook = (input: PreToolUseInput) => Promise<PreToolUseResult>;
 
 /** 將 Claude CLI 的模型別名對應到完整模型 ID */
 function resolveModelFlag(model: string): string {
-  // Claude CLI 接受別名 (opus, sonnet) 或完整名稱 (claude-opus-4-6)
-  // 這裡的 model 來自 SUPPORTED_MODELS，格式為 "claude-opus-4.6"
-  // 需要轉換為 CLI 可用的格式 "claude-opus-4-6"
+  // Claude CLI 接受別名 (opus, sonnet) 或完整名稱 (claude-opus-4-7)
+  // 這裡的 model 來自 SUPPORTED_MODELS，格式為 "claude-opus-4.7"
+  // 需要轉換為 CLI 可用的格式 "claude-opus-4-7"
   return model.replace(/\./g, "-");
 }
 
@@ -85,7 +85,7 @@ export class ClaudeCodeSdkClient implements AiClient {
   async queryProviderInfo(): Promise<AiProviderInfo> {
     return {
       models: [
-        "claude-opus-4.6",
+        "claude-opus-4.7",
         "claude-sonnet-4.6",
         "claude-haiku-4.5"
       ],
