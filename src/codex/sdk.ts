@@ -4,7 +4,7 @@ import { isSandboxActive } from "../sandbox-profile.js";
 
 const retryBackoffsMs = [1000, 2000, 5000];
 const CLI_TIMEOUT_MS = 300_000; // Codex 可能需要較長時間（多輪工具呼叫）
-const TURN_COMPLETED_GRACE_MS = 60000;
+const TURN_COMPLETED_GRACE_MS = 1000;
 
 // 本地 CLI 整體 timeout 訊息；屬於「agent 卡死」而非網路暫態，不重試。
 const LOCAL_CLI_TIMEOUT_MARKER = "Codex CLI exceeded";
@@ -60,7 +60,7 @@ export class CodexSdkClient implements AiClient {
   async queryProviderInfo(): Promise<AiProviderInfo> {
     return {
       models: [
-        "gpt-5.4",
+        "gpt-5.5",
         "gpt-5.4-mini"
       ],
       version: "Codex-CLI"

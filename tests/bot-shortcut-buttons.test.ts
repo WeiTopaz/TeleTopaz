@@ -87,7 +87,7 @@ describe("shortcut buttons", () => {
 
     await (service as any).handleShortcut(1, "teletopaz");
 
-    expect((service as any).createSession).toHaveBeenCalledWith(1, "/home/user/TeleTopaz", "gpt-5.4");
+    expect((service as any).createSession).toHaveBeenCalledWith(1, "/home/user/TeleTopaz", "gpt-5.5");
     expect((service as any).sendStatusFooter).toHaveBeenCalledWith(1);
   });
 

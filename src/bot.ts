@@ -95,11 +95,11 @@ interface ShortcutConfig {
 
 const SHORTCUT_BUTTONS: ShortcutConfig[] = [
   {
-    label: "TeleTopaz",
+    label: "💎 TeleTopaz",
     callbackKey: "teletopaz",
     command: "/teletopaz",
     targetDirName: "TeleTopaz",
-    modelEntry: "cdcli:gpt-5.4",
+    modelEntry: "cdcli:gpt-5.5",
   },
   {
     label: "📔 日記",

@@ -183,7 +183,7 @@ npm start
 | `/project` | 選擇工作目錄（Workspace） |
 | `/newproject <名稱>` | 在目前工作區旁建立新專案目錄 |
 | `/model` | 設定 AI 模型與路由模式（Auto/Manual） |
-| `/teletopaz` | 切換到 `TeleTopaz` 專案並使用 `cdcli:gpt-5.4` |
+| `/teletopaz` | 切換到 `TeleTopaz` 專案並使用 `cdcli:gpt-5.5` |
 | `/diary` | 切換到 `MyDiary` 專案並使用 `cdcli:gpt-5.4-mini` |
 | `/notebook` | 切換到 `MyNotebook` 專案並使用 `cccli:claude-sonnet-4.6` |
 | `/info`（或 `/i`） | 檢視目前狀態、模型與資源使用量 |
@@ -200,7 +200,7 @@ npm start
 
 | 按鈕 | 目標專案 | 模型 |
 |---|---|---|
-| `TeleTopaz` | `TeleTopaz` | `cdcli:gpt-5.4` |
+| `💎 TeleTopaz` | `TeleTopaz` | `cdcli:gpt-5.5` |
 | `📔 日記` | `MyDiary` | `cdcli:gpt-5.4-mini` |
 | `📓 筆記` | `MyNotebook` | `cccli:claude-sonnet-4.6` |
 
@@ -212,7 +212,7 @@ npm start
 
 | Entry | 供應商 | 說明 |
 |---|---|---|
-| `ctcli:gpt-5.4` | GitHub Copilot | **預設 Core** |
+| `ctcli:gpt-5.4` | GitHub Copilot | |
 | `ctcli:gpt-5-mini` | GitHub Copilot | 輕量，適合 Router |
 | `ctcli:claude-opus-4.6` | GitHub Copilot | |
 | `ctcli:claude-sonnet-4.6` | GitHub Copilot | |
@@ -220,8 +220,10 @@ npm start
 | `cccli:claude-opus-4.7` | Claude Code CLI | |
 | `cccli:claude-sonnet-4.6` | Claude Code CLI | |
 | `cccli:claude-haiku-4.5` | Claude Code CLI | 輕量 |
+| `cdcli:gpt-5.5` | Codex CLI | **預設 Core** |
+| `cdcli:gpt-5.4-mini` | Codex CLI | 預設 Router |
 
-> Auto Mode 預設以 `cdcli:gpt-5.4-mini` 作為 Router、`cdcli:gpt-5.4` 作為 Core。
+> Auto Mode 預設以 `cdcli:gpt-5.4-mini` 作為 Router、`cdcli:gpt-5.5` 作為 Core。
 
 ---
 

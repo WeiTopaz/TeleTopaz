@@ -69,7 +69,7 @@ describe("TeleTopazService tool permissions", () => {
     const safeSend = vi.fn().mockResolvedValue(undefined);
 
     (service as unknown as { loadAllowedDirectories: () => Promise<string[]> }).loadAllowedDirectories = vi.fn().mockResolvedValue(["/tmp/project"]);
-    (service as unknown as { getModels: (provider?: string) => Promise<string[]> }).getModels = vi.fn().mockResolvedValue(["gpt-5.4", "gpt-5.4-mini"]);
+    (service as unknown as { getModels: (provider?: string) => Promise<string[]> }).getModels = vi.fn().mockResolvedValue(["gpt-5.5", "gpt-5.4-mini"]);
     (service as unknown as { createProviderClient: () => AiClient }).createProviderClient = vi.fn().mockReturnValue(client);
     (service as unknown as { safeSend: typeof safeSend }).safeSend = safeSend;
     (service as unknown as { sessionMemory: { buildContext: (scope: unknown) => Promise<string | undefined> } }).sessionMemory = {
@@ -78,11 +78,11 @@ describe("TeleTopazService tool permissions", () => {
 
     await (service as unknown as {
       createSession: (chatId: number, cwd: string, model?: string) => Promise<void>;
-    }).createSession(1, "/tmp/project", "cdcli:gpt-5.4");
+    }).createSession(1, "/tmp/project", "cdcli:gpt-5.5");
 
     expect((service as unknown as { createProviderClient: ReturnType<typeof vi.fn> }).createProviderClient).toHaveBeenCalledWith("codex");
     expect(client.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "gpt-5.4" })
+      expect.objectContaining({ model: "gpt-5.5" })
     );
   });
 

@@ -12,7 +12,7 @@ export type SupportedModel = {
 };
 
 const DEFAULT_ROUTER_MODEL_NAME = "gpt-5.4-mini";
-const DEFAULT_CORE_MODEL_NAME = "gpt-5.4";
+const DEFAULT_CORE_MODEL_NAME = "gpt-5.5";
 
 export const DEFAULT_ROUTER_MODEL = `cdcli:${DEFAULT_ROUTER_MODEL_NAME}` as const;
 export const DEFAULT_CORE_MODEL = `cdcli:${DEFAULT_CORE_MODEL_NAME}` as const;
@@ -49,7 +49,7 @@ const REGISTERED_MODELS: SupportedModel[] = [
   { provider: "claude-code", cli: "cccli", model: "claude-opus-4.7", entry: "cccli:claude-opus-4.7" },
   { provider: "claude-code", cli: "cccli", model: "claude-sonnet-4.6", entry: "cccli:claude-sonnet-4.6" },
   { provider: "claude-code", cli: "cccli", model: "claude-haiku-4.5", entry: "cccli:claude-haiku-4.5" },
-  { provider: "codex", cli: "cdcli", model: "gpt-5.4", entry: "cdcli:gpt-5.4" },
+  { provider: "codex", cli: "cdcli", model: "gpt-5.5", entry: "cdcli:gpt-5.5" },
   { provider: "codex", cli: "cdcli", model: "gpt-5.4-mini", entry: "cdcli:gpt-5.4-mini" }
 ];
 

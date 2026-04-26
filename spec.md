@@ -543,7 +543,7 @@ const MIME_EXTENSIONS: Record<string, string> = {
 | `/project` | `do.project` | `sendDirectoryList()` | 選擇專案 |
 | `/newproject` | — | `handleNewProject()` | 在工作區建立新專案目錄 |
 | `/model` | `do.model` | `handleModelCommand()` | 設定 AI 模型與路由模式 |
-| `/teletopaz` | — | `handleShortcut("teletopaz")` | 切換到 `TeleTopaz` 並使用 `cdcli:gpt-5.4` |
+| `/teletopaz` | — | `handleShortcut("teletopaz")` | 切換到 `TeleTopaz` 並使用 `cdcli:gpt-5.5` |
 | `/diary` | — | `handleShortcut("diary")` | 切換到 `MyDiary` 並使用 `cdcli:gpt-5.4-mini` |
 | `/notebook` | — | `handleShortcut("notebook")` | 切換到 `MyNotebook` 並使用 `cccli:claude-sonnet-4.6` |
 | `/info`, `/i` | `do.info` | `sendStatus()` | 檢視狀態、模型、用量 |
@@ -562,7 +562,7 @@ Telegram 歡迎訊息的 inline keyboard 下方附帶一列快捷按鈕；同一
 
 | Label | `callbackKey` | 目標工作區 | 切換模型 |
 |-------|---------------|------------|----------|
-| TeleTopaz | `teletopaz` | `TeleTopaz` | `cdcli:gpt-5.4` |
+| TeleTopaz | `teletopaz` | `TeleTopaz` | `cdcli:gpt-5.5` |
 | 📔 日記 | `diary` | `MyDiary` | `cdcli:gpt-5.4-mini` |
 | 📓 筆記 | `notebook` | `MyNotebook` | `cccli:claude-sonnet-4.6` |
 
@@ -2182,6 +2182,8 @@ type SupportedModel = {
 | `cccli:claude-opus-4.7` | Claude Code (Anthropic) | Core |
 | `cccli:claude-sonnet-4.6` | Claude Code (Anthropic) | Core |
 | `cccli:claude-haiku-4.5` | Claude Code (Anthropic) | Router / 輕量 |
+| `cdcli:gpt-5.5` | Codex CLI (OpenAI) | Core |
+| `cdcli:gpt-5.4-mini` | Codex CLI (OpenAI) | Router |
 
 #### 顯示格式
 
@@ -2189,7 +2191,7 @@ type SupportedModel = {
 {cliLabel}:{modelName}
 ```
 
-其中 `cliLabel` 為 `ctcli`（Copilot）、`gmcli`（Gemini）或 `cccli`（Claude Code）。
+其中 `cliLabel` 為 `ctcli`（Copilot）、`gmcli`（Gemini）、`cccli`（Claude Code）或 `cdcli`（Codex CLI）。
 
 #### 關鍵函式
 
@@ -2205,7 +2207,7 @@ type SupportedModel = {
 | `getDefaultModel(models)` | 取得預設模型 |
 | `getDefaultModelEnvName()` | 回傳預設模型環境變數名稱 |
 
-> `DEFAULT_ROUTER_MODEL = cdcli:gpt-5.4-mini`、`DEFAULT_CORE_MODEL = cdcli:gpt-5.4`、`DEFAULT_MODEL_ENTRY = DEFAULT_CORE_MODEL`。
+> `DEFAULT_ROUTER_MODEL = cdcli:gpt-5.4-mini`、`DEFAULT_CORE_MODEL = cdcli:gpt-5.5`、`DEFAULT_MODEL_ENTRY = DEFAULT_CORE_MODEL`。
 
 ### 12.3 目錄存取控制 (`src/config/directories.ts`)
 
@@ -2417,8 +2419,8 @@ function stripAttachmentContext(prompt: string): string
 | `CLASSIFIER_TIMEOUT_MS` (WhatsApp) | 30,000 (30 秒) | WhatsApp 意圖分類逾時 |
 | `POLLING_ERROR_DEDUPE_WINDOW_MS` | 15,000 (15 秒) | 錯誤去重複時間窗口 |
 | `DEFAULT_ROUTER_MODEL` | `cdcli:gpt-5.4-mini` | Auto Mode 預設 Router |
-| `DEFAULT_CORE_MODEL` | `cdcli:gpt-5.4` | Auto Mode 預設 Core |
-| `DEFAULT_MODEL_ENTRY` | `cdcli:gpt-5.4` | 預設模型條目 |
+| `DEFAULT_CORE_MODEL` | `cdcli:gpt-5.5` | Auto Mode 預設 Core |
+| `DEFAULT_MODEL_ENTRY` | `cdcli:gpt-5.5` | 預設模型條目 |
 | `DEFAULT_MAX_ENTRIES` (記憶) | 24 | 持久化記憶最大筆數 |
 | `DEFAULT_MAX_CHARS` (記憶) | 400 | 每筆記憶最大字元數 |
 | `modelsTtlMs` | 300,000 (5 分鐘) | 模型快取 TTL |

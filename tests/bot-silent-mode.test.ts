@@ -293,7 +293,7 @@ describe("status display includes silent mode", () => {
 
     const block = await (service as any).buildStatusBlock(Number("1"));
     expect(block).toContain("🔇 安靜模式：開啟");
-    expect(block).toContain("/teletopaz — 切換到 TeleTopaz 專案並使用 cdcli:gpt-5.4");
+    expect(block).toContain("/teletopaz — 切換到 TeleTopaz 專案並使用 cdcli:gpt-5.5");
     expect(block).toContain("/diary — 切換到 MyDiary 專案並使用 cdcli:gpt-5.4-mini");
     expect(block).toContain("/notebook — 切換到 MyNotebook 專案並使用 cccli:claude-sonnet-4.6");
     expect(block).toContain("/silent — 切換安靜/正常通知模式");

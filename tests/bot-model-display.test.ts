@@ -110,7 +110,7 @@ describe("TeleTopazService model display", () => {
         "cccli:claude-opus-4.7",
         "cccli:claude-sonnet-4.6",
         "cccli:claude-haiku-4.5",
-        "cdcli:gpt-5.4",
+        "cdcli:gpt-5.5",
         "cdcli:gpt-5.4-mini"
       ])
     );
@@ -126,13 +126,13 @@ describe("TeleTopazService model display", () => {
 
     state.mode = "manual";
     state.provider = "codex";
-    state.model = "gpt-5.4";
+    state.model = "gpt-5.5";
 
     const text = (service as unknown as {
       prepareOutgoingRaw: (chatId: number, text: string) => string;
     }).prepareOutgoingRaw(1, "完成");
 
-    expect(text).toContain("💎TeleTopaz in 尚未選擇專案 / cdcli:gpt-5.4");
+    expect(text).toContain("💎TeleTopaz in 尚未選擇專案 / cdcli:gpt-5.5");
   });
 
   it("keeps the active auto-routed Codex model on the cdcli prefix", () => {
@@ -143,15 +143,15 @@ describe("TeleTopazService model display", () => {
 
     state.mode = "auto";
     state.provider = "codex";
-    state.model = "gpt-5.4";
+    state.model = "gpt-5.5";
     state.routerModel = "ctcli:gpt-5-mini";
-    state.coreModel = "cdcli:gpt-5.4";
+    state.coreModel = "cdcli:gpt-5.5";
 
     const text = (service as unknown as {
       prepareOutgoingRaw: (chatId: number, text: string) => string;
     }).prepareOutgoingRaw(1, "完成");
 
-    expect(text).toContain("💎TeleTopaz in 尚未選擇專案 / Auto:cdcli:gpt-5.4");
+    expect(text).toContain("💎TeleTopaz in 尚未選擇專案 / Auto:cdcli:gpt-5.5");
   });
 
   it("keeps gmcli core models out of the router picker and inside the core picker", async () => {
