@@ -238,7 +238,10 @@ describe("CodexSdkSession abort cleanup", () => {
     await Promise.resolve();
 
     try {
-      await vi.advanceTimersByTimeAsync(1500);
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1_000);
       expect(settled).toBe(true);
       expect(events).toContainEqual({
         type: "assistant.message",

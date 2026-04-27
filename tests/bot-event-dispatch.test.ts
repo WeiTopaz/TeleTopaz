@@ -130,6 +130,27 @@ describe("event dispatch", () => {
     );
   });
 
+  it("finishes the processing message when session.idle arrives without a final assistant message", async () => {
+    const { service } = createService();
+    const state = (service as any).getOrCreateState(1);
+    state.session = createSession();
+    state.workDir = "/tmp/project";
+    state.activePrompt = "整理目前修改";
+    state.processingMessageId = 42;
+    state.silentMode = false;
+    state.pendingTasks = [];
+    state.awaitingReply = true;
+    state.receivedAssistantMessage = false;
+    state.completionPending = false;
+
+    await (service as any).handleEvent(1, { type: "session.idle" });
+
+    expect((service as any).editMessageSafe).toHaveBeenCalledWith(1, 42, "✅完成：整理目前修改");
+    expect(state.awaitingReply).toBe(false);
+    expect(state.completionPending).toBe(false);
+    expect(state.processingMessageId).toBeUndefined();
+  });
+
   it("processes next pending task on session.idle", async () => {
     const { service } = createService();
     const state = (service as any).getOrCreateState(1);

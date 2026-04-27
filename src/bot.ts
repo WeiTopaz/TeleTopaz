@@ -2278,9 +2278,16 @@ export class TeleTopazService {
         }
         if (state.pendingTasks.length === 0) {
           if (state.awaitingReply) {
-            state.completionPending = true;
+            state.awaitingReply = false;
+            state.completionPending = false;
+            state.activePrompt = completedPrompt;
+            await this.sendDoneNotice(chatId, state);
+            state.activePrompt = undefined;
+            await this.sendStatusFooter(chatId);
           } else if (!state.receivedAssistantMessage) {
-            await this.sendDoneNotice(chatId, { ...state, activePrompt: completedPrompt });
+            state.activePrompt = completedPrompt;
+            await this.sendDoneNotice(chatId, state);
+            state.activePrompt = undefined;
             await this.sendStatusFooter(chatId);
           } else {
             await this.sendStatusFooter(chatId);
