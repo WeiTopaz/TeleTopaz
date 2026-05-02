@@ -44,4 +44,14 @@ describe("buildPersonaPrompt", () => {
       expect(prompt).toMatch(/Computer Use/i);
     }
   });
+
+  it("tells headless agents to bound web fetch attempts and stop on X/Twitter shell pages", async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "teletopaz-persona-"));
+    const prompt = await buildPersonaPrompt(tempDir, "codex");
+
+    expect(prompt).toMatch(/網路抓取/);
+    expect(prompt).toMatch(/X\/Twitter/);
+    expect(prompt).toMatch(/最多\s*3\s*次/);
+    expect(prompt).toMatch(/不要反覆嘗試/);
+  });
 });

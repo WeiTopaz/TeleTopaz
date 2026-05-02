@@ -31,7 +31,7 @@ function resolveProviderName(provider?: string): string {
 }
 
 const NO_GUI_ENVIRONMENT_NOTICE =
-  "環境限制：本代理在無 GUI 終端下執行（headless / sandbox）。禁止呼叫 open -a、osascript、AppleScript、Computer Use，或任何會啟動 macOS 桌面應用程式與外部 app/connector 的工具。檔案讀寫請直接使用內建的 shell / 編輯器工具，不要 fall back 到外部 GUI 編輯器或其他外部連接器。";
+  "環境限制：本代理在無 GUI 終端下執行（headless / sandbox）。禁止呼叫 open -a、osascript、AppleScript、Computer Use，或任何會啟動 macOS 桌面應用程式與外部 app/connector 的工具。檔案讀寫請直接使用內建的 shell / 編輯器工具，不要 fall back 到外部 GUI 編輯器或其他外部連接器。網路抓取必須設定 timeout 並保持有界；若 X/Twitter 等頁面只能取得登入頁、前端 HTML/JS shell 或需要瀏覽器/登入，最多 3 次不同非 GUI 嘗試後就停止，不要反覆嘗試，改為回報限制或存放可驗證的限制說明。";
 
 export async function buildPersonaPrompt(cwd: string, provider?: string, memoryContext?: string): Promise<string> {
   const sections: string[] = [];
