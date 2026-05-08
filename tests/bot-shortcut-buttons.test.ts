@@ -58,21 +58,48 @@ describe("shortcut buttons", () => {
     exitSpy.mockRestore();
   });
 
-  it("buildNavKeyboard returns 2 rows: first row 3 buttons, second row 3 buttons", () => {
+  it("buildNavKeyboard returns 2 rows: first row 3 buttons, second row 3 buttons", async () => {
     const { service } = createService();
-    const keyboard = (service as any).buildNavKeyboard();
+    const keyboard = await (service as any).buildNavKeyboard(1);
     expect(keyboard.inline_keyboard).toHaveLength(2);
     expect(keyboard.inline_keyboard[0]).toHaveLength(3);
     expect(keyboard.inline_keyboard[1]).toHaveLength(3);
   });
 
-  it("buildNavKeyboard second row has correct callback_data", () => {
+  it("buildNavKeyboard second row has correct callback_data", async () => {
     const { service } = createService();
-    const keyboard = (service as any).buildNavKeyboard();
+    const keyboard = await (service as any).buildNavKeyboard(1);
     const secondRow = keyboard.inline_keyboard[1];
-    expect(secondRow[0].callback_data).toBe("do.shortcut:teletopaz");
+    expect(secondRow[0].callback_data).toBe("do.shortcut:recent_regular_project");
     expect(secondRow[1].callback_data).toBe("do.shortcut:diary");
     expect(secondRow[2].callback_data).toBe("do.shortcut:notebook");
+  });
+
+  it("buildNavKeyboard shows the recent regular project label when it is still allowed", async () => {
+    const { service } = createService();
+    (service as any).loadAllowedDirectories = vi.fn().mockResolvedValue([
+      "/home/user/TeleTopaz",
+      "/home/user/ProjectA",
+    ]);
+    const state = (service as any).getOrCreateState(1);
+    state.recentRegularProjectDir = "/home/user/ProjectA";
+
+    const keyboard = await (service as any).buildNavKeyboard(1);
+
+    expect(keyboard.inline_keyboard[1][0].text).toBe("💎 ProjectA");
+  });
+
+  it("buildNavKeyboard falls back to TeleTopaz label when the recent regular project is no longer allowed", async () => {
+    const { service } = createService();
+    (service as any).loadAllowedDirectories = vi.fn().mockResolvedValue([
+      "/home/user/TeleTopaz",
+    ]);
+    const state = (service as any).getOrCreateState(1);
+    state.recentRegularProjectDir = "/home/user/ProjectA";
+
+    const keyboard = await (service as any).buildNavKeyboard(1);
+
+    expect(keyboard.inline_keyboard[1][0].text).toBe("💎 TeleTopaz");
   });
 
   it("handleShortcut teletopaz with matching directory calls createSession and sendStatusFooter", async () => {
@@ -89,6 +116,74 @@ describe("shortcut buttons", () => {
 
     expect((service as any).createSession).toHaveBeenCalledWith(1, "/home/user/TeleTopaz", "gpt-5.5");
     expect((service as any).sendStatusFooter).toHaveBeenCalledWith(1);
+  });
+
+  it("handleShortcut recent_regular_project uses the recent regular project when valid", async () => {
+    const { service } = createService();
+    (service as any).loadAllowedDirectories = vi.fn().mockResolvedValue([
+      "/home/user/TeleTopaz",
+      "/home/user/ProjectA",
+    ]);
+    const state = (service as any).getOrCreateState(1);
+    state.recentRegularProjectDir = "/home/user/ProjectA";
+    (service as any).createSession = vi.fn().mockResolvedValue(undefined);
+    (service as any).sendStatusFooter = vi.fn().mockResolvedValue(undefined);
+
+    await (service as any).handleShortcut(1, "recent_regular_project");
+
+    expect((service as any).createSession).toHaveBeenCalledWith(1, "/home/user/ProjectA", "gpt-5.5");
+    expect((service as any).sendStatusFooter).toHaveBeenCalledWith(1);
+  });
+
+  it("handleShortcut recent_regular_project falls back to TeleTopaz when recent project is invalid", async () => {
+    const { service } = createService();
+    (service as any).loadAllowedDirectories = vi.fn().mockResolvedValue([
+      "/home/user/TeleTopaz",
+    ]);
+    const state = (service as any).getOrCreateState(1);
+    state.recentRegularProjectDir = "/home/user/ProjectA";
+    (service as any).createSession = vi.fn().mockResolvedValue(undefined);
+    (service as any).sendStatusFooter = vi.fn().mockResolvedValue(undefined);
+
+    await (service as any).handleShortcut(1, "recent_regular_project");
+
+    expect((service as any).createSession).toHaveBeenCalledWith(1, "/home/user/TeleTopaz", "gpt-5.5");
+  });
+
+  it("handleShortcut recent_regular_project reports an error when neither recent project nor TeleTopaz is allowed", async () => {
+    const { service } = createService();
+    (service as any).loadAllowedDirectories = vi.fn().mockResolvedValue([
+      "/home/user/OtherProject",
+    ]);
+    const state = (service as any).getOrCreateState(1);
+    state.recentRegularProjectDir = "/home/user/ProjectA";
+    (service as any).createSession = vi.fn().mockResolvedValue(undefined);
+    (service as any).sendStatusFooter = vi.fn().mockResolvedValue(undefined);
+
+    await (service as any).handleShortcut(1, "recent_regular_project");
+
+    expect((service as any).safeSend).toHaveBeenCalledWith(
+      1,
+      expect.stringContaining("TeleTopaz")
+    );
+    expect((service as any).createSession).not.toHaveBeenCalled();
+  });
+
+  it("handleShortcut recent_regular_project does not target diary or notebook as recent projects", async () => {
+    const { service } = createService();
+    (service as any).loadAllowedDirectories = vi.fn().mockResolvedValue([
+      "/home/user/TeleTopaz",
+      "/home/user/MyDiary",
+      "/home/user/MyNotebook",
+    ]);
+    const state = (service as any).getOrCreateState(1);
+    state.recentRegularProjectDir = "/home/user/MyDiary";
+    (service as any).createSession = vi.fn().mockResolvedValue(undefined);
+    (service as any).sendStatusFooter = vi.fn().mockResolvedValue(undefined);
+
+    await (service as any).handleShortcut(1, "recent_regular_project");
+
+    expect((service as any).createSession).toHaveBeenCalledWith(1, "/home/user/TeleTopaz", "gpt-5.5");
   });
 
   it("handleShortcut with matching directory calls createSession and sendStatusFooter", async () => {
@@ -150,11 +245,64 @@ describe("shortcut buttons", () => {
     expect((service as any).handleShortcut).toHaveBeenCalledWith(1, "notebook");
   });
 
+  it("setDirectory records the selected regular project before auto pending returns", async () => {
+    const { service } = createService();
+    const state = (service as any).getOrCreateState(1);
+    state.mode = "auto";
+    state.model = undefined;
+    state.cachedDirs = ["/home/user/ProjectA"];
+    (service as any).sendStatusFooter = vi.fn().mockResolvedValue(undefined);
+    (service as any).buildNavKeyboard = vi.fn().mockResolvedValue({
+      inline_keyboard: [[], []],
+    });
+    (service as any).createSession = vi.fn().mockResolvedValue(undefined);
+
+    await (service as any).setDirectory(1, 0);
+
+    expect(state.recentRegularProjectDir).toBe("/home/user/ProjectA");
+    expect((service as any).createSession).not.toHaveBeenCalled();
+  });
+
+  it("setDirectory does not replace the recent regular project when selecting diary or notebook", async () => {
+    const { service } = createService();
+    const state = (service as any).getOrCreateState(1);
+    state.mode = "auto";
+    state.model = undefined;
+    state.recentRegularProjectDir = "/home/user/ProjectA";
+    state.cachedDirs = ["/home/user/MyDiary", "/home/user/MyNotebook"];
+    (service as any).sendStatusFooter = vi.fn().mockResolvedValue(undefined);
+    (service as any).buildNavKeyboard = vi.fn().mockResolvedValue({
+      inline_keyboard: [[], []],
+    });
+
+    await (service as any).setDirectory(1, 0);
+
+    expect(state.recentRegularProjectDir).toBe("/home/user/ProjectA");
+  });
+
+  it("setDirectory auto pending message uses the recent regular project label outside footer", async () => {
+    const { service } = createService();
+    const state = (service as any).getOrCreateState(1);
+    state.mode = "auto";
+    state.model = undefined;
+    state.cachedDirs = ["/home/user/ProjectA"];
+    (service as any).loadAllowedDirectories = vi.fn().mockResolvedValue([
+      "/home/user/TeleTopaz",
+      "/home/user/ProjectA",
+    ]);
+    (service as any).sendStatusFooter = vi.fn().mockResolvedValue(undefined);
+
+    await (service as any).setDirectory(1, 0);
+
+    const keyboard = (service as any).safeSend.mock.calls[0][3];
+    expect(keyboard.inline_keyboard[1][0].text).toBe("💎 ProjectA");
+  });
+
   it("sendStatus uses buildNavKeyboard (keyboard has 2 rows)", async () => {
     const { service } = createService();
     // Mock buildStatusBlock to avoid complex setup
     (service as any).buildStatusBlock = vi.fn().mockResolvedValue("status text");
-    (service as any).buildNavKeyboard = vi.fn().mockReturnValue({
+    (service as any).buildNavKeyboard = vi.fn().mockResolvedValue({
       inline_keyboard: [
         [
           { text: "📁 專案", callback_data: "do.project" },
@@ -162,7 +310,7 @@ describe("shortcut buttons", () => {
           { text: "📋 說明", callback_data: "do.info" },
         ],
         [
-          { text: "TeleTopaz", callback_data: "do.shortcut:teletopaz" },
+          { text: "💎 TeleTopaz", callback_data: "do.shortcut:recent_regular_project" },
           { text: "📔 日記", callback_data: "do.shortcut:diary" },
           { text: "📓 筆記", callback_data: "do.shortcut:notebook" },
         ],
@@ -171,6 +319,6 @@ describe("shortcut buttons", () => {
 
     await (service as any).sendStatus(1);
 
-    expect((service as any).buildNavKeyboard).toHaveBeenCalled();
+    expect((service as any).buildNavKeyboard).toHaveBeenCalledWith(1);
   });
 });

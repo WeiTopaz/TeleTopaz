@@ -109,6 +109,22 @@ describe("command handling", () => {
     expect((service as any).handleShortcut).toHaveBeenCalledWith(1, "teletopaz");
   });
 
+  it("/teletopaz keeps targeting TeleTopaz even when a recent regular project exists", async () => {
+    const { service } = createService();
+    (service as any).loadAllowedDirectories = vi.fn().mockResolvedValue([
+      "/home/user/TeleTopaz",
+      "/home/user/ProjectA",
+    ]);
+    const state = (service as any).getOrCreateState(1);
+    state.recentRegularProjectDir = "/home/user/ProjectA";
+    (service as any).createSession = vi.fn().mockResolvedValue(undefined);
+    (service as any).sendStatusFooter = vi.fn().mockResolvedValue(undefined);
+
+    await (service as any).handleCommand(makeMsg("/teletopaz"));
+
+    expect((service as any).createSession).toHaveBeenCalledWith(1, "/home/user/TeleTopaz", "gpt-5.5");
+  });
+
   it("/diary routes to handleShortcut", async () => {
     const { service } = createService();
     (service as any).handleShortcut = vi.fn().mockResolvedValue(undefined);

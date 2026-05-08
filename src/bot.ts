@@ -117,6 +117,9 @@ const SHORTCUT_BUTTONS: ShortcutConfig[] = [
   },
 ];
 
+const RECENT_REGULAR_PROJECT_CALLBACK_KEY = "recent_regular_project";
+const EXCLUDED_RECENT_PROJECT_NAMES = new Set(["MyDiary", "MyNotebook"]);
+
 type CommandHelpEntry = {
   command: string;
   description: string;
@@ -1625,14 +1628,19 @@ export class TeleTopazService {
   }
 
   private async handleShortcut(chatId: number, shortcutKey: string): Promise<void> {
-    const config = SHORTCUT_BUTTONS.find((sc) => sc.callbackKey === shortcutKey);
+    const config = shortcutKey === RECENT_REGULAR_PROJECT_CALLBACK_KEY
+      ? SHORTCUT_BUTTONS.find((sc) => sc.callbackKey === "teletopaz")
+      : SHORTCUT_BUTTONS.find((sc) => sc.callbackKey === shortcutKey);
     if (!config) {
       await this.safeSend(chatId, "未知的快捷操作。");
       return;
     }
 
     const dirs = await this.loadAllowedDirectories();
-    const targetDir = dirs.find((d) => path.basename(d) === config.targetDirName);
+    const state = this.getOrCreateState(chatId);
+    const targetDir = shortcutKey === RECENT_REGULAR_PROJECT_CALLBACK_KEY
+      ? this.resolveRecentRegularShortcutTarget(state, dirs, config.targetDirName)
+      : dirs.find((d) => path.basename(d) === config.targetDirName);
     if (!targetDir) {
       await this.safeSend(
         chatId,
@@ -1641,7 +1649,6 @@ export class TeleTopazService {
       return;
     }
 
-    const state = this.getOrCreateState(chatId);
     const parsed = parseConfiguredModelEntry(config.modelEntry);
     state.provider = parsed.provider;
     state.model = parsed.model;
@@ -1701,16 +1708,18 @@ export class TeleTopazService {
     }
     if (state.mode === "auto" && !state.model) {
       state.workDir = selected;
+      this.recordRecentRegularProject(state, selected);
       const projectLabel = path.basename(selected);
       await this.safeSend(
         chatId,
         `💎TeleTopaz in ${projectLabel} / 系統訊息\n\n📂 ${projectLabel}\n⚙️ ${this.formatStateModelLabel(state)}\n🔌 待路由`,
         undefined,
-        this.buildNavKeyboard()
+        await this.buildNavKeyboard(chatId)
       );
       await this.sendStatusFooter(chatId);
       return;
     }
+    this.recordRecentRegularProject(state, selected);
     await this.createSession(chatId, selected);
   }
 
@@ -1777,7 +1786,7 @@ export class TeleTopazService {
       ...buildCommandHelpSection()
     );
 
-    const keyboard = this.buildNavKeyboard();
+    const keyboard = await this.buildNavKeyboard(chatId);
 
     await this.safeSend(chatId, lines.join("\n"), undefined, keyboard);
   }
@@ -2160,7 +2169,7 @@ export class TeleTopazService {
       const projectLabel = path.basename(canonicalCwd);
       const modelLabel = this.formatStateModelLabel(state, useModel);
       if (options.announce !== false) {
-        await this.safeSend(chatId, `💎TeleTopaz in ${projectLabel} / 系統訊息\n\n📂 ${projectLabel}\n⚙️ ${modelLabel}\n🔌 已連線`, undefined, this.buildNavKeyboard());
+        await this.safeSend(chatId, `💎TeleTopaz in ${projectLabel} / 系統訊息\n\n📂 ${projectLabel}\n⚙️ ${modelLabel}\n🔌 已連線`, undefined, await this.buildNavKeyboard(chatId, allowedDirs));
         await this.sendStatusFooter(chatId);
       }
     } catch (err) {
@@ -2761,6 +2770,7 @@ export class TeleTopazService {
       lastProactiveRebuildNotice: undefined,
       starredModels: [],
       cachedDirs: [],
+      recentRegularProjectDir: undefined,
       personaLoaded: false,
       reactionEmojis: null,
       allowAll: false,
@@ -2922,11 +2932,53 @@ export class TeleTopazService {
     return this.formatModelEntry(state.provider, state.model ?? "未設定");
   }
 
-  private buildNavKeyboard(): InlineKeyboardMarkup {
-    const shortcuts = SHORTCUT_BUTTONS.map((sc) => ({
-      text: sc.label,
-      callback_data: `do.shortcut:${sc.callbackKey}`,
-    }));
+  private isRecentRegularProjectDir(dir: string): boolean {
+    return !EXCLUDED_RECENT_PROJECT_NAMES.has(path.basename(dir));
+  }
+
+  private findAllowedDirectory(dirs: string[], target: string | undefined): string | undefined {
+    if (!target) return undefined;
+    const resolvedTarget = path.resolve(target);
+    return dirs.find((dir) => path.resolve(dir) === resolvedTarget);
+  }
+
+  private getValidRecentRegularProjectDir(state: AgentContext, dirs: string[]): string | undefined {
+    const recent = this.findAllowedDirectory(dirs, state.recentRegularProjectDir);
+    if (!recent || !this.isRecentRegularProjectDir(recent)) return undefined;
+    return recent;
+  }
+
+  private resolveRecentRegularShortcutTarget(
+    state: AgentContext,
+    dirs: string[],
+    fallbackDirName: string
+  ): string | undefined {
+    return this.getValidRecentRegularProjectDir(state, dirs)
+      ?? dirs.find((dir) => path.basename(dir) === fallbackDirName);
+  }
+
+  private recordRecentRegularProject(state: AgentContext, dir: string): void {
+    if (this.isRecentRegularProjectDir(dir)) {
+      state.recentRegularProjectDir = dir;
+    }
+  }
+
+  private async buildNavKeyboard(chatId: number, allowedDirs?: string[]): Promise<InlineKeyboardMarkup> {
+    const state = this.getOrCreateState(chatId);
+    const dirs = allowedDirs ?? await this.loadAllowedDirectories();
+    const recentDir = this.getValidRecentRegularProjectDir(state, dirs);
+    const shortcuts = SHORTCUT_BUTTONS.map((sc) => {
+      if (sc.callbackKey === "teletopaz") {
+        return {
+          text: recentDir ? `💎 ${path.basename(recentDir)}` : sc.label,
+          callback_data: `do.shortcut:${RECENT_REGULAR_PROJECT_CALLBACK_KEY}`,
+        };
+      }
+      return {
+        text: sc.label,
+        callback_data: `do.shortcut:${sc.callbackKey}`,
+      };
+    });
 
     return {
       inline_keyboard: [
@@ -2965,13 +3017,13 @@ export class TeleTopazService {
       return; // silent mode 不主動推送系統狀態，使用者可用 /info 主動查看
     }
     const text = await this.buildStatusBlock(chatId);
-    await this.safeSend(chatId, text.trim(), undefined, this.buildNavKeyboard());
+    await this.safeSend(chatId, text.trim(), undefined, await this.buildNavKeyboard(chatId));
   }
 
   private async sendWelcome(providerInfo: string | undefined, dirs: string[], models: string[], message?: TelegramMessage): Promise<void> {
     const chatId = Number(this.ownerChatId);
     const text = await this.buildStatusBlock(chatId);
-    await this.safeSend(chatId, text.trim(), message?.message_id, this.buildNavKeyboard());
+    await this.safeSend(chatId, text.trim(), message?.message_id, await this.buildNavKeyboard(chatId, dirs));
   }
 
   private async fetchOwnerName(): Promise<string> {

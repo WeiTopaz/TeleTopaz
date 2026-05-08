@@ -558,21 +558,24 @@ const MIME_EXTENSIONS: Record<string, string> = {
 
 #### 快捷按鈕 (`SHORTCUT_BUTTONS`)
 
-Telegram 歡迎訊息的 inline keyboard 下方附帶一列快捷按鈕；同一份 `SHORTCUT_BUTTONS` 設定也提供 `/teletopaz`、`/diary`、`/notebook` 三個 slash commands。按下按鈕或輸入指令後，都會自動切換工作區與模型：
+Telegram 歡迎訊息的 inline keyboard 下方附帶一列快捷按鈕；`SHORTCUT_BUTTONS` 仍提供 `/teletopaz`、`/diary`、`/notebook` 三個 slash commands。第二排第一顆互動按鈕使用專用 callback，會優先切換到同一 chat 最近透過專案列表選擇的普通專案；若沒有有效最近普通專案，則 fallback 到 `TeleTopaz`。`/teletopaz` slash command 保持固定切換 `TeleTopaz`。
 
 | Label | `callbackKey` | 目標工作區 | 切換模型 |
 |-------|---------------|------------|----------|
-| TeleTopaz | `teletopaz` | `TeleTopaz` | `cdcli:gpt-5.5` |
+| 💎 最近普通專案 | `recent_regular_project` | 最近普通專案，無有效紀錄時為 `TeleTopaz` | `cdcli:gpt-5.5` |
+| TeleTopaz slash command | `teletopaz` | `TeleTopaz` | `cdcli:gpt-5.5` |
 | 📔 日記 | `diary` | `MyDiary` | `cdcli:gpt-5.4-mini` |
 | 📓 筆記 | `notebook` | `MyNotebook` | `cccli:claude-sonnet-4.6` |
 
 回調格式：`do.shortcut:{callbackKey}`
 
 處理流程：
-1. 從 `SHORTCUT_BUTTONS` 找到對應 config
-2. 搜尋 `loadAllowedDirectories()` 中是否有 `basename === config.targetDirName`
-3. 若找到：切換 `provider` / `mode` / `workDir` / `model`，立即重建 session
-4. 若未找到：回傳「找不到目錄 {targetDirName}，請確認 TELETOPAZ_DIRECTORY_PATTERNS 設定」
+1. 從 callback key 找到對應 config；`recent_regular_project` 會沿用 `TeleTopaz` 的 `cdcli:gpt-5.5` 模型設定。
+2. `recent_regular_project` 先檢查 `AgentContext.recentRegularProjectDir` 是否仍在 `loadAllowedDirectories()` 且 basename 不是 `MyDiary` / `MyNotebook`。
+3. 若最近普通專案有效：切換到該目錄；否則搜尋 `TeleTopaz` fallback。
+4. 其他快捷鍵搜尋 `loadAllowedDirectories()` 中是否有 `basename === config.targetDirName`。
+5. 若找到：切換 `provider` / `mode` / `workDir` / `model`，立即重建 session。
+6. 若未找到：回傳「找不到目錄 {targetDirName}，請確認 TELETOPAZ_DIRECTORY_PATTERNS 設定」。
 
 #### 4.3.1 `/newproject` 指令規格
 
@@ -691,7 +694,7 @@ type ToolTracking = {
 | `do.model` / `do.model:{sub}` | 模型選擇 UI（子路由含 `auto`, `config_router`, `config_core`） |
 | `do.info` | 顯示狀態 |
 | `do.help` | 顯示說明 |
-| `do.shortcut:{key}` | 套用快捷切換（如 `TeleTopaz` / `MyDiary` / `MyNotebook`） |
+| `do.shortcut:{key}` | 套用快捷切換（如最近普通專案 fallback `TeleTopaz` / `MyDiary` / `MyNotebook`） |
 | `pick.proj:{idx}` | 設定工作目錄 |
 | `pick.mod:{idx}` | 設定模型（手動模式） |
 | `do.model:pick.manual:{idx}` | 設定模型（手動模式，統一 UI，`do.model:` 子路由） |
@@ -776,6 +779,7 @@ type AgentContext = {
 
   // 快取
   cachedDirs: string[]
+  recentRegularProjectDir: string | undefined // Telegram 快捷按鈕的最近普通專案，runtime-only
   personaLoaded: boolean
   reactionEmojis: string[] | null
 

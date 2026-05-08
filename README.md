@@ -200,11 +200,11 @@ npm start
 
 | 按鈕 | 目標專案 | 模型 |
 |---|---|---|
-| `💎 TeleTopaz` | `TeleTopaz` | `cdcli:gpt-5.5` |
+| `💎 {最近普通專案}` | 最近透過 `/project` 選擇、且仍在允許清單中的普通專案；沒有有效紀錄時 fallback `TeleTopaz` | `cdcli:gpt-5.5` |
 | `📔 日記` | `MyDiary` | `cdcli:gpt-5.4-mini` |
 | `📓 筆記` | `MyNotebook` | `cccli:claude-sonnet-4.6` |
 
-上述三顆按鈕與 `/teletopaz`、`/diary`、`/notebook` 共用同一份快捷設定，行為一致。
+第一顆按鈕只對互動按鈕採動態最近專案語意；`/teletopaz` slash command 仍固定切換到 `TeleTopaz`。日記與筆記按鈕及 `/diary`、`/notebook` 行為不變。
 
 ---
 

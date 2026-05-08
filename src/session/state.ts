@@ -53,6 +53,7 @@ export interface AgentContext extends BaseSessionState {
   } | undefined;
   starredModels: string[];
   cachedDirs: string[];
+  recentRegularProjectDir: string | undefined;
   personaLoaded: boolean;
   reactionEmojis: string[] | null;
   silentAnchorMessageId: number | undefined;
