@@ -112,7 +112,7 @@ describe("CodexSdkSession abort cleanup", () => {
     const session = new CodexSdkSession({
       model: "gpt-5.4-mini",
       workingDirectory: "/tmp",
-      approvalMode: "auto_edit"
+      approvalMode: "yolo"
     });
 
     const events: AiEvent[] = [];
@@ -184,7 +184,7 @@ describe("CodexSdkSession abort cleanup", () => {
     const session = new CodexSdkSession({
       model: "gpt-5.4-mini",
       workingDirectory: "/tmp",
-      approvalMode: "auto_edit"
+      approvalMode: "yolo"
     });
 
     const sendPromise = session.send("只回覆 ok");
@@ -196,6 +196,37 @@ describe("CodexSdkSession abort cleanup", () => {
     const args = spawnCall?.[1] as string[] | undefined;
     expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(args).not.toContain("--full-auto");
+
+    mock.emitStdout(JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "ok" }
+    }) + "\n");
+    mock.emitClose(0);
+    await sendPromise;
+  });
+
+  it("does not bypass approvals and sandbox for auto_edit mode inside TeleTopaz sandbox", async () => {
+    process.env["TELETOPAZ_SANDBOX_ACTIVE"] = "1";
+
+    const mock = createMockChild();
+    vi.mocked(spawn).mockReturnValueOnce(mock.child as unknown as ReturnType<typeof spawn>);
+
+    const session = new CodexSdkSession({
+      model: "gpt-5.4-mini",
+      workingDirectory: "/tmp",
+      approvalMode: "auto_edit"
+    });
+
+    const sendPromise = session.send("只回覆 ok");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const spawnCall = vi.mocked(spawn).mock.calls[0];
+    expect(spawnCall).toBeDefined();
+    const args = spawnCall?.[1] as string[] | undefined;
+    expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(args).not.toContain("--full-auto");
+    expect(args).toEqual(expect.arrayContaining(["--sandbox", "workspace-write"]));
 
     mock.emitStdout(JSON.stringify({
       type: "item.completed",

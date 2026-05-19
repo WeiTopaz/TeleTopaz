@@ -174,20 +174,22 @@ export class CodexSdkSession implements AiSession {
   /**
    * 將 AiSessionOptions.approvalMode 對應到 Codex CLI 的旗標。
    * TeleTopaz 已由外層 macOS sandbox-exec 隔離時，改用 Codex 官方 bypass 旗標，
-   * 避免再觸發內層 workspace-write sandbox 的 sandbox_apply 失敗。
-   * 非 TeleTopaz sandbox 環境仍維持 sandboxed full-auto。
+   * 避免 yolo 模式再觸發內層 workspace-write sandbox 的 sandbox_apply 失敗。
+   * 非 yolo 模式不可 bypass，否則 /allowall 關閉後仍會自動放行工具操作。
    */
   private resolveApprovalArgs(): string[] {
     switch (this.options.approvalMode) {
       case "plan":
-        return ["--sandbox", "read-only", "--full-auto"];
-      case "yolo":
+        return ["--sandbox", "read-only"];
       case "auto_edit":
-      default:
+        return ["--sandbox", "workspace-write"];
+      case "yolo":
         if (isSandboxActive()) {
           return ["--dangerously-bypass-approvals-and-sandbox"];
         }
-        return ["--full-auto"];
+        return ["--sandbox", "danger-full-access"];
+      default:
+        return [];
     }
   }
 

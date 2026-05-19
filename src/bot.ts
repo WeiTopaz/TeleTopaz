@@ -167,7 +167,8 @@ type SendPromptResult = {
 
 function resolveApprovalMode(provider: ProviderType, allowAll?: boolean): "plan" | "auto_edit" | "yolo" | undefined {
   if (provider === "gemini") return "plan";
-  if (provider === "claude-code" || provider === "codex") return allowAll ? "yolo" : "auto_edit";
+  if (provider === "codex") return allowAll ? "yolo" : "plan";
+  if (provider === "claude-code") return allowAll ? "yolo" : "auto_edit";
   return undefined;
 }
 
@@ -1361,6 +1362,13 @@ export class TeleTopazService {
   private async handleAllowAllToggle(chatId: number): Promise<void> {
     const state = this.getOrCreateState(chatId);
     state.allowAll = !state.allowAll;
+
+    if (state.session && state.workDir && state.model) {
+      const queuedTasks = [...state.pendingTasks];
+      await this.createSession(chatId, state.workDir, state.model, { announce: false });
+      state.pendingTasks = queuedTasks;
+    }
+
     const statusText = state.allowAll
       ? "🔓 已切換為「全部允許」模式，工具操作將自動批准，不再逐次詢問。\n再次輸入 /allowall 可回到確認模式。"
       : "🔒 已切換回「操作確認」模式，高風險操作將逐次詢問。";
