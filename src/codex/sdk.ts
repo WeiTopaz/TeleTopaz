@@ -3,11 +3,20 @@ import type { AiAttachment, AiClient, AiSession, AiEvent, AiSessionOptions, AiPr
 import { isSandboxActive } from "../sandbox-profile.js";
 
 const retryBackoffsMs = [1000, 2000, 5000];
-const CLI_TIMEOUT_MS = 300_000; // Codex 可能需要較長時間（多輪工具呼叫）
+const DEFAULT_CLI_TIMEOUT_MS = 1_800_000; // Codex gpt-5.5 長任務可能需要 30 分鐘
+const CLI_TIMEOUT_ENV = "TELETOPAZ_CODEX_CLI_TIMEOUT_MS";
 const TURN_COMPLETED_GRACE_MS = 60_000;
 
 // 本地 CLI 整體 timeout 訊息；屬於「agent 卡死」而非網路暫態，不重試。
 const LOCAL_CLI_TIMEOUT_MARKER = "Codex CLI exceeded";
+
+export function resolveCodexCliTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[CLI_TIMEOUT_ENV];
+  if (!raw) return DEFAULT_CLI_TIMEOUT_MS;
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CLI_TIMEOUT_MS;
+}
 
 export function isRetryableError(err: Error | null): boolean {
   if (!err) return false;
@@ -249,12 +258,13 @@ export class CodexSdkSession implements AiSession {
 
       signal.addEventListener("abort", abortHandler);
 
+      const cliTimeoutMs = resolveCodexCliTimeoutMs();
       const timeoutTimer = setTimeout(() => {
         if (!child.killed) child.kill("SIGKILL");
         child.stdout?.destroy();
         child.stderr?.destroy();
-        finish(new Error("timeout: " + LOCAL_CLI_TIMEOUT_MARKER + " " + CLI_TIMEOUT_MS + "ms"));
-      }, CLI_TIMEOUT_MS);
+        finish(new Error("timeout: " + LOCAL_CLI_TIMEOUT_MARKER + " " + cliTimeoutMs + "ms"));
+      }, cliTimeoutMs);
 
       const scheduleTurnCompletedFinish = () => {
         if (resolved || closeReceived || turnCompletedTimer) return;

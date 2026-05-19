@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { spawn } from "node:child_process";
-import { CodexSdkSession, isRetryableError } from "../src/codex/sdk.js";
+import { CodexSdkSession, isRetryableError, resolveCodexCliTimeoutMs } from "../src/codex/sdk.js";
 import type { AiEvent } from "../src/provider/types.js";
 
 vi.mock("node:child_process", () => ({
@@ -82,10 +82,17 @@ describe("codex isRetryableError", () => {
     expect(isRetryableError(null)).toBe(false);
     expect(isRetryableError(new Error("command not found: codex"))).toBe(false);
   });
+
+  it("uses a longer Codex CLI timeout by default and accepts positive env overrides", () => {
+    expect(resolveCodexCliTimeoutMs({})).toBe(1_800_000);
+    expect(resolveCodexCliTimeoutMs({ TELETOPAZ_CODEX_CLI_TIMEOUT_MS: "1200000" })).toBe(1_200_000);
+    expect(resolveCodexCliTimeoutMs({ TELETOPAZ_CODEX_CLI_TIMEOUT_MS: "nope" })).toBe(1_800_000);
+  });
 });
 
 describe("CodexSdkSession abort cleanup", () => {
   const originalSandboxEnv = process.env["TELETOPAZ_SANDBOX_ACTIVE"];
+  const originalCodexTimeoutEnv = process.env["TELETOPAZ_CODEX_CLI_TIMEOUT_MS"];
 
   beforeEach(() => {
     vi.mocked(spawn).mockClear();
@@ -102,6 +109,11 @@ describe("CodexSdkSession abort cleanup", () => {
       delete process.env["TELETOPAZ_SANDBOX_ACTIVE"];
     } else {
       process.env["TELETOPAZ_SANDBOX_ACTIVE"] = originalSandboxEnv;
+    }
+    if (originalCodexTimeoutEnv === undefined) {
+      delete process.env["TELETOPAZ_CODEX_CLI_TIMEOUT_MS"];
+    } else {
+      process.env["TELETOPAZ_CODEX_CLI_TIMEOUT_MS"] = originalCodexTimeoutEnv;
     }
   });
 
@@ -285,6 +297,43 @@ describe("CodexSdkSession abort cleanup", () => {
       await Promise.resolve();
       await sendPromise;
     }
+  });
+
+  it("honors the Codex CLI timeout env override", async () => {
+    vi.useFakeTimers();
+    process.env["TELETOPAZ_CODEX_CLI_TIMEOUT_MS"] = "1000";
+    const mock = createMockChild();
+    vi.mocked(spawn).mockReturnValueOnce(mock.child as unknown as ReturnType<typeof spawn>);
+
+    const session = new CodexSdkSession({
+      model: "gpt-5.4-mini",
+      workingDirectory: "/tmp",
+      approvalMode: "auto_edit"
+    });
+
+    const events: AiEvent[] = [];
+    session.onEvent((event) => events.push(event));
+
+    const sendPromise = session.send("test");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(mock.child.kill).not.toHaveBeenCalled();
+    expect(events).not.toContainEqual(expect.objectContaining({
+      type: "assistant.message",
+      data: expect.objectContaining({ content: expect.stringContaining("Codex CLI exceeded") })
+    }));
+
+    await vi.advanceTimersByTimeAsync(1);
+    await sendPromise;
+
+    expect(mock.child.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "assistant.message",
+      data: expect.objectContaining({ content: expect.stringContaining("1000ms") })
+    }));
+    expect(events).toContainEqual({ type: "session.idle" });
   });
 
   it("parses commentary and function-call events from current Codex JSON output", () => {
