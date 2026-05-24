@@ -3,11 +3,23 @@ import type { AiAttachment, AiClient, AiSession, AiEvent, AiSessionOptions, AiPr
 import { isSandboxActive } from "../sandbox-profile.js";
 
 const retryBackoffsMs = [1000, 2000, 5000];
-const CLI_TIMEOUT_MS = 300_000; // Codex 可能需要較長時間（多輪工具呼叫）
+const DEFAULT_CLI_TIMEOUT_MS = 1_800_000; // Codex gpt-5.5 長任務可能需要 30 分鐘
+const CLI_TIMEOUT_ENV = "TELETOPAZ_CODEX_CLI_TIMEOUT_MS";
 const TURN_COMPLETED_GRACE_MS = 60_000;
+// 已收到 final agent_message 但缺 turn.completed / close 時的收束 grace。
+// stdout 每來一個事件就重置；只有真的靜默這段時間才會收束。
+const FINAL_MESSAGE_GRACE_MS = 60_000;
 
 // 本地 CLI 整體 timeout 訊息；屬於「agent 卡死」而非網路暫態，不重試。
 const LOCAL_CLI_TIMEOUT_MARKER = "Codex CLI exceeded";
+
+export function resolveCodexCliTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[CLI_TIMEOUT_ENV];
+  if (!raw) return DEFAULT_CLI_TIMEOUT_MS;
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CLI_TIMEOUT_MS;
+}
 
 export function isRetryableError(err: Error | null): boolean {
   if (!err) return false;
@@ -174,20 +186,22 @@ export class CodexSdkSession implements AiSession {
   /**
    * 將 AiSessionOptions.approvalMode 對應到 Codex CLI 的旗標。
    * TeleTopaz 已由外層 macOS sandbox-exec 隔離時，改用 Codex 官方 bypass 旗標，
-   * 避免再觸發內層 workspace-write sandbox 的 sandbox_apply 失敗。
-   * 非 TeleTopaz sandbox 環境仍維持 sandboxed full-auto。
+   * 避免 yolo 模式再觸發內層 workspace-write sandbox 的 sandbox_apply 失敗。
+   * 非 yolo 模式不可 bypass，否則 /allowall 關閉後仍會自動放行工具操作。
    */
   private resolveApprovalArgs(): string[] {
     switch (this.options.approvalMode) {
       case "plan":
-        return ["--sandbox", "read-only", "--full-auto"];
-      case "yolo":
+        return ["--sandbox", "read-only"];
       case "auto_edit":
-      default:
+        return ["--sandbox", "workspace-write"];
+      case "yolo":
         if (isSandboxActive()) {
           return ["--dangerously-bypass-approvals-and-sandbox"];
         }
-        return ["--full-auto"];
+        return ["--sandbox", "danger-full-access"];
+      default:
+        return [];
     }
   }
 
@@ -222,11 +236,16 @@ export class CodexSdkSession implements AiSession {
       let resolved = false;
       let closeReceived = false;
       let turnCompletedTimer: NodeJS.Timeout | undefined;
+      let finalMessageTimer: NodeJS.Timeout | undefined;
+      // timeout 診斷用 — 僅保存事件「型別」這類安全資訊,不存 prompt / 工具輸出
+      let lastEventType: string | undefined;
+      let lastPayloadType: string | undefined;
 
       const cleanup = () => {
         signal.removeEventListener("abort", abortHandler);
         clearTimeout(timeoutTimer);
         if (turnCompletedTimer) clearTimeout(turnCompletedTimer);
+        if (finalMessageTimer) clearTimeout(finalMessageTimer);
       };
 
       const finish = (err: Error | null, result?: string) => {
@@ -247,12 +266,18 @@ export class CodexSdkSession implements AiSession {
 
       signal.addEventListener("abort", abortHandler);
 
+      const cliTimeoutMs = resolveCodexCliTimeoutMs();
       const timeoutTimer = setTimeout(() => {
         if (!child.killed) child.kill("SIGKILL");
         child.stdout?.destroy();
         child.stderr?.destroy();
-        finish(new Error("timeout: " + LOCAL_CLI_TIMEOUT_MARKER + " " + CLI_TIMEOUT_MS + "ms"));
-      }, CLI_TIMEOUT_MS);
+        const diag = [
+          "lastEvent=" + (lastEventType || "none"),
+          "lastPayload=" + (lastPayloadType || "none"),
+          "hasResponse=" + (this.responseText ? "true" : "false")
+        ].join(", ");
+        finish(new Error("timeout: " + LOCAL_CLI_TIMEOUT_MARKER + " " + cliTimeoutMs + "ms (" + diag + ")"));
+      }, cliTimeoutMs);
 
       const scheduleTurnCompletedFinish = () => {
         if (resolved || closeReceived || turnCompletedTimer) return;
@@ -264,6 +289,23 @@ export class CodexSdkSession implements AiSession {
           if (!child.killed) child.kill("SIGKILL");
           finish(null, this.responseText);
         }, TURN_COMPLETED_GRACE_MS);
+      };
+
+      // 已有 final agent_message 但缺 turn.completed / close 時的 fallback。
+      // 每次 stdout 事件都會重置 timer,只在真正靜默 grace period 後才收束;
+      // 若途中又出現新工具呼叫,timer 會繼續被推遲,不會過早 cut。
+      const scheduleFinalMessageFinish = () => {
+        if (resolved || closeReceived) return;
+        if (!this.responseText) return;
+        if (finalMessageTimer) clearTimeout(finalMessageTimer);
+        finalMessageTimer = setTimeout(() => {
+          if (resolved || closeReceived) return;
+          if (!this.responseText) return;
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          if (!child.killed) child.kill("SIGKILL");
+          finish(null, this.responseText);
+        }, FINAL_MESSAGE_GRACE_MS);
       };
 
       child.stdout.setEncoding("utf8");
@@ -284,9 +326,29 @@ export class CodexSdkSession implements AiSession {
             continue;
           }
 
+          // 追蹤事件型別供 timeout 診斷與 fallback 判斷
+          const eventType = typeof event.type === "string" ? event.type : undefined;
+          if (eventType) lastEventType = eventType;
+          const item = event.item as Record<string, unknown> | undefined;
+          const payload = event.payload as Record<string, unknown> | undefined;
+          const itemType = item && typeof item.type === "string" ? item.type : undefined;
+          const payloadInnerType = payload && typeof payload.type === "string" ? payload.type : undefined;
+          const payloadType = itemType ?? payloadInnerType;
+          if (payloadType) lastPayloadType = payloadType;
+
+          if (finalMessageTimer) {
+            clearTimeout(finalMessageTimer);
+            finalMessageTimer = undefined;
+          }
+          const isFinalMessageEvent = this.hasFinalAssistantMessageText(event);
           this.handleStreamEvent(event);
           if (event.type === "turn.completed") {
             scheduleTurnCompletedFinish();
+          }
+          // 只在目前事件本身是 final agent_message 時啟動 fallback timer。
+          // 工具事件或 commentary 不能沿用舊 responseText 收束，避免長工具呼叫被提早截斷。
+          if (isFinalMessageEvent && this.responseText) {
+            scheduleFinalMessageFinish();
           }
         }
       });
@@ -434,6 +496,31 @@ export class CodexSdkSession implements AiSession {
     }
 
     this.responseText = text;
+  }
+
+  private hasFinalAssistantMessageText(event: Record<string, unknown>): boolean {
+    const eventType = event.type as string | undefined;
+    const item = event.item as Record<string, unknown> | undefined;
+
+    if (eventType === "item.completed" && item?.type === "agent_message") {
+      return typeof item.text === "string" && item.text.length > 0;
+    }
+
+    const payload = event.payload;
+    if (!payload || typeof payload !== "object") return false;
+    const record = payload as Record<string, unknown>;
+    const phase = this.extractString(record, ["phase"]);
+    if (phase === "commentary") return false;
+
+    if (eventType === "event_msg" && record.type === "agent_message") {
+      return Boolean(this.extractText(record.message ?? record));
+    }
+
+    if (eventType === "response_item" && record.type === "message" && record.role === "assistant") {
+      return Boolean(this.extractText(record));
+    }
+
+    return false;
   }
 
   private extractText(payload: unknown): string | undefined {

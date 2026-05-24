@@ -118,4 +118,44 @@ describe("/allowall command", () => {
     }
     await approvalPromise;
   });
+
+  it("creates Codex sessions in read-only plan mode when allowAll is false", async () => {
+    const { service, client } = createService();
+    const state = (service as any).getOrCreateState(1);
+    state.provider = "codex";
+    state.allowAll = false;
+
+    await (service as any).createSession(1, "/tmp/project", "gpt-5.4-mini", { announce: false });
+
+    expect(client.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      approvalMode: "plan"
+    }));
+  });
+
+  it("rebuilds an active Codex session when toggling allowAll so the new approval mode takes effect immediately", async () => {
+    const { service, client } = createService();
+    const state = (service as any).getOrCreateState(1);
+    const session = {
+      destroy: vi.fn().mockResolvedValue(undefined),
+      onEvent: vi.fn(),
+      send: vi.fn().mockResolvedValue(undefined),
+      sendAndWait: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined)
+    };
+
+    state.provider = "codex";
+    state.allowAll = true;
+    state.workDir = "/tmp/project";
+    state.model = "gpt-5.4-mini";
+    state.session = session;
+    state.client = client;
+
+    await (service as any).handleAllowAllToggle(1);
+
+    expect(session.destroy).toHaveBeenCalledOnce();
+    expect(client.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: "gpt-5.4-mini",
+      approvalMode: "plan"
+    }));
+  });
 });
