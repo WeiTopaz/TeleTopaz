@@ -299,6 +299,160 @@ describe("CodexSdkSession abort cleanup", () => {
     }
   });
 
+  it("finishes after final agent_message grace even when turn.completed and close are missing", async () => {
+    vi.useFakeTimers();
+    const mock = createMockChild();
+    vi.mocked(spawn).mockReturnValueOnce(mock.child as unknown as ReturnType<typeof spawn>);
+
+    const session = new CodexSdkSession({
+      model: "gpt-5.4-mini",
+      workingDirectory: "/tmp",
+      approvalMode: "auto_edit"
+    });
+
+    const events: AiEvent[] = [];
+    session.onEvent((event) => events.push(event));
+
+    let settled = false;
+    const sendPromise = session.send("只回覆 ok").then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // 只送 final agent_message,不送 turn.completed,不送 close
+    mock.emitStdout(JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "ok" }
+    }) + "\n");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    try {
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toBe(true);
+
+      expect(mock.child.stdout.destroy).toHaveBeenCalled();
+      expect(mock.child.stderr.destroy).toHaveBeenCalled();
+      expect(mock.child.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(events).toContainEqual({
+        type: "assistant.message",
+        data: { content: "ok" }
+      });
+      expect(events).toContainEqual({ type: "session.idle" });
+    } finally {
+      await session.abort();
+      await Promise.resolve();
+      await Promise.resolve();
+      await sendPromise;
+    }
+  });
+
+  it("does not finish via final-message fallback after a later tool event until another final message arrives", async () => {
+    vi.useFakeTimers();
+    const mock = createMockChild();
+    vi.mocked(spawn).mockReturnValueOnce(mock.child as unknown as ReturnType<typeof spawn>);
+
+    const session = new CodexSdkSession({
+      model: "gpt-5.4-mini",
+      workingDirectory: "/tmp",
+      approvalMode: "auto_edit"
+    });
+
+    let settled = false;
+    const sendPromise = session.send("test").then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    mock.emitStdout(JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "first" }
+    }) + "\n");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    try {
+      // 在 grace 期內又收到新的工具事件,fallback timer 應該被重置
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(settled).toBe(false);
+
+      mock.emitStdout(JSON.stringify({
+        type: "item.started",
+        item: { type: "command_execution", id: "c1", command: ["ls"] }
+      }) + "\n");
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // 工具事件代表上一則 agent_message 不是可收束的 final，不能在工具靜默時用舊訊息結束。
+      await vi.advanceTimersByTimeAsync(60_001);
+      expect(settled).toBe(false);
+
+      mock.emitStdout(JSON.stringify({
+        type: "item.completed",
+        item: { type: "agent_message", text: "second" }
+      }) + "\n");
+      await Promise.resolve();
+      await Promise.resolve();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(settled).toBe(true);
+    } finally {
+      await session.abort();
+      await Promise.resolve();
+      await Promise.resolve();
+      await sendPromise;
+    }
+  });
+
+  it("timeout error includes safe codex progress diagnostics without leaking prompt", async () => {
+    vi.useFakeTimers();
+    process.env["TELETOPAZ_CODEX_CLI_TIMEOUT_MS"] = "1000";
+    const mock = createMockChild();
+    vi.mocked(spawn).mockReturnValueOnce(mock.child as unknown as ReturnType<typeof spawn>);
+
+    const session = new CodexSdkSession({
+      model: "gpt-5.4-mini",
+      workingDirectory: "/tmp",
+      approvalMode: "auto_edit"
+    });
+
+    const events: AiEvent[] = [];
+    session.onEvent((event) => events.push(event));
+
+    const secretPrompt = "MY_SECRET_DIARY_CONTENT_DO_NOT_LEAK";
+    const sendPromise = session.send(secretPrompt);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // 只有工具事件,沒有 final agent_message — 模擬「卡在 tool 完成之後」的情境
+    mock.emitStdout(JSON.stringify({
+      type: "item.completed",
+      item: { type: "command_execution", id: "cmd-1", exit_code: 0, aggregated_output: "" }
+    }) + "\n");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await sendPromise;
+
+    const errEvent = events.find(
+      (e) => e.type === "assistant.message"
+        && typeof (e.data as { content?: string })?.content === "string"
+        && (e.data as { content: string }).content.includes("Codex CLI exceeded")
+    );
+    expect(errEvent).toBeDefined();
+    const content = (errEvent!.data as { content: string }).content;
+    expect(content).toContain("hasResponse=false");
+    expect(content).toContain("lastEvent=item.completed");
+    expect(content).toContain("lastPayload=command_execution");
+    expect(content).not.toContain(secretPrompt);
+  });
+
   it("honors the Codex CLI timeout env override", async () => {
     vi.useFakeTimers();
     process.env["TELETOPAZ_CODEX_CLI_TIMEOUT_MS"] = "1000";
